@@ -308,7 +308,7 @@ class ASRProvider extends ChangeNotifier {
       
       final jsonData = getExportData();
       await file.writeAsString(
-        JsonEncoder.withIndent('  ').convert(jsonData)
+        const JsonEncoder.withIndent('  ').convert(jsonData)
       );
       
       return file.path;

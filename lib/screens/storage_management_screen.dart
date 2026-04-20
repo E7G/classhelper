@@ -270,6 +270,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
+              final messenger = ScaffoldMessenger.of(context);
               try {
                 for (final category in _selectedCategories) {
                   await _deleteCategoryData(category);
@@ -279,7 +280,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                   _isSelectAll = false;
                 });
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     const SnackBar(
                       content: Text('已删除选中分类的数据'),
                       duration: Duration(seconds: 1),
@@ -288,7 +289,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(content: Text('删除失败: $e')),
                   );
                 }
@@ -318,10 +319,11 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
+              final messenger = ScaffoldMessenger.of(context);
               try {
                 await _deleteCategoryData(category);
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(
                       content: Text('已删除分类 "$category" 的数据'),
                       duration: const Duration(seconds: 1),
@@ -330,7 +332,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(content: Text('删除失败: $e')),
                   );
                 }
@@ -372,6 +374,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
+              final messenger = ScaffoldMessenger.of(context);
               try {
                 final pdfProvider = context.read<PdfProvider>();
                 final noteProvider = context.read<NoteProvider>();
@@ -394,7 +397,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 });
 
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     const SnackBar(
                       content: Text('已清空所有数据'),
                       duration: Duration(seconds: 1),
@@ -403,7 +406,7 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(content: Text('清空失败: $e')),
                   );
                 }

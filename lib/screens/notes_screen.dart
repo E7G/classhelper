@@ -156,8 +156,9 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
     );
 
-    if (confirmed == true && controller.text.isNotEmpty) {
-      await context.read<NoteProvider>().createNote(
+    if (confirmed == true && controller.text.isNotEmpty && mounted) {
+      final provider = context.read<NoteProvider>();
+      await provider.createNote(
         content: controller.text,
         type: NoteType.manual,
       );
@@ -193,9 +194,10 @@ class _NotesScreenState extends State<NotesScreen> {
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && mounted) {
       final updatedNote = note.copyWith(content: controller.text);
-      await context.read<NoteProvider>().updateNote(updatedNote);
+      final provider = context.read<NoteProvider>();
+      await provider.updateNote(updatedNote);
     }
     
     controller.dispose();
@@ -221,10 +223,11 @@ class _NotesScreenState extends State<NotesScreen> {
     );
 
     if (confirmed == true && mounted) {
+      final messenger = ScaffoldMessenger.of(context);
       try {
         await provider.deleteNote(id);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          messenger.showSnackBar(
             const SnackBar(
               content: Text('笔记已删除'),
               duration: Duration(seconds: 1),
@@ -233,7 +236,7 @@ class _NotesScreenState extends State<NotesScreen> {
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          messenger.showSnackBar(
             SnackBar(content: Text('删除失败: $e')),
           );
         }

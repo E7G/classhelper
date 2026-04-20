@@ -1261,17 +1261,19 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
         final savedPath = '${photosDir.path}/photo_$timestamp$ext';
         
         await File(photo.path).copy(savedPath);
-        
-        await context.read<NoteProvider>().createNote(
-          content: controller.text.isEmpty ? '照片笔记' : controller.text,
-          type: NoteType.photo,
-          pdfPath: pdfProvider.filePath,
-          pdfPage: pdfProvider.isDocumentLoaded ? pdfProvider.currentPage : null,
-          imagePath: savedPath,
-        );
-        
+
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          final provider = context.read<NoteProvider>();
+          final messenger = ScaffoldMessenger.of(context);
+          await provider.createNote(
+            content: controller.text.isEmpty ? '照片笔记' : controller.text,
+            type: NoteType.photo,
+            pdfPath: pdfProvider.filePath,
+            pdfPage: pdfProvider.isDocumentLoaded ? pdfProvider.currentPage : null,
+            imagePath: savedPath,
+          );
+
+          messenger.showSnackBar(
             const SnackBar(content: Text('照片笔记已保存')),
           );
         }
@@ -1675,8 +1677,8 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.broken_image, size: 16),
-                    SizedBox(width: 8),
+                    const Icon(Icons.broken_image, size: 16),
+                    const SizedBox(width: 8),
                     Text(alt ?? '图片加载失败', style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),

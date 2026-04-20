@@ -265,16 +265,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           _buildSection(
             title: '关于',
-            children: [
+            children: const [
               ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('版本'),
-                subtitle: const Text('1.0.0'),
+                leading: Icon(Icons.info_outline),
+                title: Text('版本'),
+                subtitle: Text('1.0.0'),
               ),
               ListTile(
-                leading: const Icon(Icons.code),
-                title: const Text('开源协议'),
-                subtitle: const Text('MIT License'),
+                leading: Icon(Icons.code),
+                title: Text('开源协议'),
+                subtitle: Text('MIT License'),
               ),
             ],
           ),
@@ -597,15 +597,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       
       await asrProvider.connect();
-      
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
           const SnackBar(content: Text('ASR服务连接成功')),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
           SnackBar(content: Text('连接失败: $e')),
         );
       }
@@ -615,9 +617,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _disconnectASR() async {
     final asrProvider = context.read<ASRProvider>();
     await asrProvider.disconnect();
-    
+
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(
         const SnackBar(content: Text('已断开连接')),
       );
     }
@@ -634,9 +637,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       questionProvider.configureLLM(config);
       
       final success = await questionProvider.testLLMConnection();
-      
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
           SnackBar(
             content: Text(
               success ? '连接成功！' : '连接失败，请检查配置',
@@ -647,7 +651,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
           SnackBar(
             content: Text('连接测试失败: $e'),
             backgroundColor: Colors.red,
@@ -711,8 +716,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       questionProvider.configureLLM(config);
       
       final models = await questionProvider.getAvailableModels();
-      
+
       if (mounted) {
+        final messenger = ScaffoldMessenger.of(context);
         if (models.isNotEmpty) {
           showDialog(
             context: context,
@@ -739,14 +745,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
+          messenger.showSnackBar(
             const SnackBar(content: Text('未找到可用模型，请确保 Ollama 服务正在运行')),
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
           SnackBar(content: Text('获取模型列表失败: $e')),
         );
       }
@@ -772,7 +779,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && mounted) {
       context.read<QuestionProvider>().clearAllQuestions();
     }
   }
@@ -796,7 +803,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && mounted) {
       context.read<NoteProvider>().clearAllNotes();
     }
   }
