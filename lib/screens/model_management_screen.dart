@@ -19,7 +19,8 @@ class ModelManagementScreen extends StatefulWidget {
 class _ModelManagementScreenState extends State<ModelManagementScreen> {
   final Logger _logger = Logger();
   final Dio _dio = Dio();
-  
+  CancelToken? _downloadCancelToken;
+
   String? _llmModelPath;
   bool _isDownloadingLlm = false;
   double _downloadProgress = 0.0;
@@ -67,6 +68,8 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
   }
 
   Future<void> _downloadLlmModel() async {
+    _downloadCancelToken = CancelToken();
+
     setState(() {
       _isDownloadingLlm = true;
       _downloadProgress = 0.0;
@@ -82,6 +85,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
       await _dio.download(
         llmModelInfo.downloadUrl,
         savePath,
+        cancelToken: _downloadCancelToken,
         onReceiveProgress: (received, total) {
           if (mounted && total > 0) {
             setState(() {
@@ -106,6 +110,22 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
           const SnackBar(content: Text('LLM模型下载完成')),
         );
       }
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) {
+        _logger.i('Download cancelled by user');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('下载已取消')),
+          );
+        }
+      } else {
+        _logger.e('Failed to download LLM model: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('下载失败: $e')),
+          );
+        }
+      }
     } catch (e) {
       _logger.e('Failed to download LLM model: $e');
       if (mounted) {
@@ -123,7 +143,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
   }
 
   void _stopLlmDownload() {
-    _dio.close();
+    _downloadCancelToken?.cancel('user_cancelled');
     setState(() {
       _isDownloadingLlm = false;
       _downloadStatus = '下载已取消';
