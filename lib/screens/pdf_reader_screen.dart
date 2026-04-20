@@ -14,6 +14,8 @@ import '../models/note.dart';
 import '../models/stroke.dart';
 import '../widgets/drawing_toolbar.dart';
 import '../widgets/note_marker.dart';
+import '../widgets/pdf_text_question_dialog.dart';
+import '../services/llm_service.dart';
 import '../screens/settings_screen.dart';
 import 'auxiliary_panel.dart';
 
@@ -29,6 +31,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _showAuxiliaryPanel = false;
   bool _showBookmarks = false;
   final _pageController = TextEditingController();
+  final _llmService = LLMService();
+  String? _selectedText;
+  Offset? _selectionPosition;
 
   @override
   void dispose() {
@@ -306,7 +311,154 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             child: _buildBookmarksPanel(pdfProvider),
           ),
         _buildNoteMarkers(pdfProvider),
+        if (!_showDrawingTools)
+          _buildTextSelectionToolbar(pdfProvider),
       ],
+    );
+  }
+
+  Widget _buildTextSelectionToolbar(PdfProvider pdfProvider) {
+    return Positioned(
+      bottom: 80,
+      right: 16,
+      child: FloatingActionButton.small(
+        heroTag: 'ask_pdf',
+        onPressed: () => _showManualQuestionDialog(pdfProvider),
+        child: const Icon(Icons.question_answer),
+      ),
+    );
+  }
+
+  void _showManualQuestionDialog(PdfProvider pdfProvider) async {
+    final textController = TextEditingController();
+    
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('针对PDF内容提问'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '当前页面: 第 ${pdfProvider.currentPage} 页',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                hintText: '输入你的问题...',
+                border: OutlineInputBorder(),
+              ),
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, textController.text),
+            child: const Text('提问'),
+          ),
+        ],
+      ),
+    );
+    
+    textController.dispose();
+    
+    if (result != null && result.isNotEmpty && mounted) {
+      await _processQuestion(result, null, pdfProvider);
+    }
+  }
+
+  Future<void> _processQuestion(String question, String? selectedText, PdfProvider pdfProvider) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Row(
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(width: 16),
+            Expanded(child: Text('正在思考: $question')),
+          ],
+        ),
+      ),
+    );
+    
+    try {
+      final answer = await _llmService.generateAnswer(
+        question,
+        context: selectedText,
+        systemPrompt: '你是学习助手。根据提供的PDF内容回答问题。简洁明了。',
+      );
+      
+      if (mounted) {
+        Navigator.pop(context);
+        
+        final noteProvider = context.read<NoteProvider>();
+        noteProvider.addNote(Note(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          content: '**问题:** $question\n\n**回答:** $answer',
+          type: NoteType.manual,
+          createdAt: DateTime.now(),
+          pdfPath: pdfProvider.filePath,
+          pdfPage: pdfProvider.currentPage,
+        ));
+        
+        _showAnswerDialog(question, answer, pdfProvider);
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('回答失败: $e')),
+        );
+      }
+    }
+  }
+
+  void _showAnswerDialog(String question, String answer, PdfProvider pdfProvider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.lightbulb, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 8),
+            const Text('AI 回答'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '问题: $question',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const Divider(),
+              MarkdownBody(
+                data: answer,
+                shrinkWrap: true,
+                softLineBreak: true,
+                selectable: true,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
     );
   }
 
