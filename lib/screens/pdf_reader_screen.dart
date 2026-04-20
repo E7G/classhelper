@@ -88,7 +88,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             return Row(
               children: [
                 Expanded(child: _buildEmptyState()),
-                if (_showAuxiliaryPanel)
+                if (_showAuxiliaryPanel && MediaQuery.of(context).size.width > 600)
                   _buildAuxiliaryPanel(),
               ],
             );
@@ -99,7 +99,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
               Expanded(
                 child: _buildPdfView(pdfProvider),
               ),
-              if (_showAuxiliaryPanel)
+              if (_showAuxiliaryPanel && MediaQuery.of(context).size.width > 600)
                 _buildAuxiliaryPanel(),
             ],
           );
@@ -175,9 +175,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                         : Icons.view_sidebar_outlined,
                   ),
                   onPressed: () {
-                    setState(() {
-                      _showAuxiliaryPanel = !_showAuxiliaryPanel;
-                    });
+                    final width = MediaQuery.of(context).size.width;
+                    if (width > 600) {
+                      setState(() {
+                        _showAuxiliaryPanel = !_showAuxiliaryPanel;
+                      });
+                    } else {
+                      _showAuxiliaryPanelAsSheet(context);
+                    }
                   },
                   tooltip: '辅助工具',
                 ),
@@ -729,8 +734,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Widget _buildAuxiliaryPanel() {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final panelWidth = screenWidth > 600 ? 360.0 : screenWidth * 0.85;
     return Container(
-      width: 360,
+      width: panelWidth,
       decoration: BoxDecoration(
         border: Border(
           left: BorderSide(
@@ -739,6 +746,40 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         ),
       ),
       child: const AuxiliaryPanel(),
+    );
+  }
+
+  void _showAuxiliaryPanelAsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.3,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.outline,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Expanded(child: AuxiliaryPanel()),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
