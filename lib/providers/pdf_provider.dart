@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'package:hive/hive.dart';
@@ -188,36 +187,36 @@ class PdfProvider extends ChangeNotifier {
   void setZoomLevel(double level) {
     final newLevel = level.clamp(0.5, 3.0);
     if (newLevel == _zoomLevel) return;
-    
-    _zoomLevel = newLevel;
-    _applyZoom();
-    notifyListeners();
+
+    try {
+      if (!controller.isReady) return;
+      controller.zoomUp();
+      _zoomLevel = controller.currentZoom;
+      _logger.i('Zoom set: $_zoomLevel');
+    } catch (e) {
+      _logger.e('Failed to set zoom: $e');
+    }
   }
 
   void zoomIn() {
-    setZoomLevel(_zoomLevel + 0.25);
+    try {
+      if (!controller.isReady) return;
+      controller.zoomUp();
+      _zoomLevel = controller.currentZoom;
+      _logger.i('Zoom in: $_zoomLevel');
+    } catch (e) {
+      _logger.e('Failed to zoom in: $e');
+    }
   }
 
   void zoomOut() {
-    setZoomLevel(_zoomLevel - 0.25);
-  }
-
-  void _applyZoom() {
-    if (!controller.isReady) {
-      _logger.w('PDF controller is not ready for zoom');
-      return;
-    }
-    
     try {
-      final viewSize = controller.viewSize;
-      if (viewSize == Size.zero) return;
-      
-      final centerOffset = Offset(viewSize.width / 2, viewSize.height / 2);
-      final matrix = controller.calcMatrixFor(centerOffset, zoom: _zoomLevel);
-      controller.goTo(matrix);
-      _logger.i('Zoom applied: $_zoomLevel');
+      if (!controller.isReady) return;
+      controller.zoomDown();
+      _zoomLevel = controller.currentZoom;
+      _logger.i('Zoom out: $_zoomLevel');
     } catch (e) {
-      _logger.e('Failed to apply zoom: $e');
+      _logger.e('Failed to zoom out: $e');
     }
   }
 
