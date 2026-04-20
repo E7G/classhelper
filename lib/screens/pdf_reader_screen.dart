@@ -14,7 +14,6 @@ import '../models/note.dart';
 import '../models/stroke.dart';
 import '../widgets/drawing_toolbar.dart';
 import '../widgets/note_marker.dart';
-import '../widgets/pdf_text_question_dialog.dart';
 import '../services/llm_service.dart';
 import '../screens/settings_screen.dart';
 import 'auxiliary_panel.dart';
@@ -32,8 +31,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _showBookmarks = false;
   final _pageController = TextEditingController();
   final _llmService = LLMService();
-  String? _selectedText;
-  Offset? _selectionPosition;
 
   @override
   void dispose() {
@@ -43,9 +40,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isWideScreen = screenWidth > 900;
-
     return Scaffold(
       appBar: _buildAppBar(),
       body: Consumer<PdfProvider>(
@@ -401,14 +395,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         Navigator.pop(context);
         
         final noteProvider = context.read<NoteProvider>();
-        noteProvider.addNote(Note(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+        await noteProvider.createNote(
           content: '**问题:** $question\n\n**回答:** $answer',
           type: NoteType.manual,
-          createdAt: DateTime.now(),
           pdfPath: pdfProvider.filePath,
           pdfPage: pdfProvider.currentPage,
-        ));
+        );
         
         _showAnswerDialog(question, answer, pdfProvider);
       }
