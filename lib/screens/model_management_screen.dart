@@ -81,7 +81,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
         llmModelInfo.downloadUrl,
         savePath,
         onReceiveProgress: (received, total) {
-          if (total > 0) {
+          if (mounted && total > 0) {
             setState(() {
               _downloadProgress = received / total;
               _downloadStatus = '下载中 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(total / 1024 / 1024).toStringAsFixed(1)}MB';
@@ -92,10 +92,12 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
       await _saveLlmModelPath(savePath);
 
-      setState(() {
-        _downloadProgress = 1.0;
-        _downloadStatus = '下载完成';
-      });
+      if (mounted) {
+        setState(() {
+          _downloadProgress = 1.0;
+          _downloadStatus = '下载完成';
+        });
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -110,9 +112,11 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
         );
       }
     } finally {
-      setState(() {
-        _isDownloadingLlm = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isDownloadingLlm = false;
+        });
+      }
     }
   }
 
