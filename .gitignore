@@ -1,0 +1,81 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code related
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Windows
+*.exe
+*.dll
+
+# Environment
+.env
+.env.local
+
+# Hive
+*.hive
+*.lock
+
+# Generated files
+*.g.dart
+*.freezed.dart
+
+# User data and exports
+ref/
+
+# Build logs
+build_log.txt
+
+# Android local properties (contains local paths)
+android/local.properties
+
+# IDE specific
+*.code-workspace
+.trae/
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+
+# Large model files (>100MB, use download scripts instead)
+assets/models/Qwen3.5-0.8B-Q4_K_M.gguf
+assets/models/sensevoice/model.int8.onnx
+assets/models/sherpa-onnx-paraformer-zh-2023-09-14/model.int8.onnx
+assets/models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/*.onnx

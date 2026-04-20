@@ -1,0 +1,65 @@
+name: classhelper
+description: 智能课堂助手 - ASR+LLM实时问答与笔记
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  cupertino_icons: ^1.0.6
+  
+  web_socket_channel: ^2.4.0
+  http: ^1.1.0
+  dio: ^5.4.0
+  
+  provider: ^6.1.1
+  flutter_riverpod: ^2.6.1
+  
+  shared_preferences: ^2.2.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  path_provider: ^2.1.1
+  
+  flutter_markdown_plus: ^1.0.3
+  markdown: ^7.2.2
+  
+  permission_handler: ^12.0.1
+  sherpa_onnx: ^1.10.5
+  record: ^6.0.0
+  llamadart: ^0.6.10
+  
+  uuid: ^4.2.2
+  intl: ^0.20.2
+  logger: ^2.0.2+1
+  
+  flutter_animate: ^4.3.0
+  google_fonts: ^8.0.2
+  
+  pdfrx: ^1.3.5
+  file_picker: ^8.0.0
+  image_picker: ^1.0.7
+  path: ^1.9.0
+  archive: ^4.0.9
+  google_mlkit_text_recognition: ^0.14.0
+  share_plus: ^10.0.0
+  wakelock_plus: ^1.2.8
+  flutter_background_service: ^5.1.0
+  flutter_local_notifications: ^18.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  hive_generator: ^2.0.1
+  build_runner: ^2.4.13
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/config/
+    - assets/models/sensevoice/
