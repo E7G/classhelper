@@ -25,11 +25,11 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
   late Box _settingsBox;
 
   static const ModelInfo llmModelInfo = ModelInfo(
-    name: 'Qwen2.5-0.5B-Instruct Q4_K_M',
+    name: 'Qwen3.5-0.8B Q4_K_M',
     description: '轻量级本地大语言模型，适合课堂助手场景',
-    downloadUrl: 'https://ghproxy.net/https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf',
-    fileName: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
-    size: '约 400MB',
+    downloadUrl: 'https://www.modelscope.cn/models/unsloth/Qwen3.5-0.8B-GGUF/resolve/master/Qwen3.5-0.8B-Q4_K_M.gguf',
+    fileName: 'Qwen3.5-0.8B-Q4_K_M.gguf',
+    size: '约 500MB',
     type: 'file',
   );
 
