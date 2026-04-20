@@ -285,9 +285,23 @@ class LocalLLMService {
     _engine?.dispose();
     _engine = null;
     _isLoaded = false;
-    _modelPath = null;
     _updateStatus(LLMStatus.notLoaded);
     _logger.i('Model unloaded');
+  }
+
+  Future<bool> deleteModelFile(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+        _logger.i('Model file deleted: $path');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      _logger.e('Failed to delete model file: $e');
+      return false;
+    }
   }
 
   void dispose() {

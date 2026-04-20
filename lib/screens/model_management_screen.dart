@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:hive/hive.dart';
+import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:logger/logger.dart';
+import '../providers/question_provider.dart';
 
 class ModelManagementScreen extends StatefulWidget {
   const ModelManagementScreen({super.key});
@@ -116,6 +118,56 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
         setState(() {
           _isDownloadingLlm = false;
         });
+      }
+    }
+  }
+
+  void _stopLlmDownload() {
+    _dio.close();
+    setState(() {
+      _isDownloadingLlm = false;
+      _downloadStatus = '下载已取消';
+    });
+  }
+
+  Future<void> _deleteLlmModel() async {
+    if (_llmModelPath == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除模型文件吗？\n$_llmModelPath'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final questionProvider = context.read<QuestionProvider>();
+      questionProvider.stopLLM();
+      final success = await questionProvider.deleteLLMModel(_llmModelPath!);
+      if (success) {
+        await _saveLlmModelPath(null);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('模型文件已删除')),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('删除失败')),
+          );
+        }
       }
     }
   }
@@ -310,15 +362,11 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
               children: [
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: _isDownloadingLlm ? null : _downloadLlmModel,
-                    icon: _isDownloadingLlm 
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                    onPressed: _isDownloadingLlm ? _stopLlmDownload : _downloadLlmModel,
+                    icon: _isDownloadingLlm
+                        ? const Icon(Icons.stop, size: 18)
                         : const Icon(Icons.download, size: 18),
-                    label: const Text('下载模型'),
+                    label: Text(_isDownloadingLlm ? '停止下载' : '下载模型'),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -331,6 +379,20 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
                 ),
               ],
             ),
+            if (_llmModelPath != null) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _deleteLlmModel,
+                  icon: const Icon(Icons.delete, size: 18),
+                  label: const Text('删除本地模型'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

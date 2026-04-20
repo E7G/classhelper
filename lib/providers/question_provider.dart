@@ -295,6 +295,22 @@ class QuestionProvider extends ChangeNotifier {
     return await _llmService.getAvailableModels();
   }
 
+  bool get isLLMLoaded => _llmService.isModelLoaded;
+
+  void stopLLM() {
+    _llmService.pauseModel();
+    notifyListeners();
+  }
+
+  void resumeLLM() {
+    _llmService.resumeModel();
+    notifyListeners();
+  }
+
+  Future<bool> deleteLLMModel(String path) async {
+    return await _llmService.localLLM.deleteModelFile(path);
+  }
+
   @override
   void dispose() {
     _llmService.dispose();
