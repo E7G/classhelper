@@ -310,6 +310,23 @@ class PdfProvider extends ChangeNotifier {
     return texts.join('\n\n');
   }
 
+  Future<String> getPagesText(int startPage, int endPage) async {
+    if (_document == null) return '';
+
+    final clampedStart = startPage.clamp(1, _totalPages);
+    final clampedEnd = endPage.clamp(1, _totalPages);
+
+    final texts = <String>[];
+    for (int i = clampedStart; i <= clampedEnd; i++) {
+      final text = await getPageText(i);
+      if (text.isNotEmpty) {
+        texts.add('--- 第 $i 页 ---\n$text');
+      }
+    }
+
+    return texts.join('\n\n');
+  }
+
   @override
   void dispose() {
     closePdf();

@@ -330,51 +330,141 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   void _showManualQuestionDialog(PdfProvider pdfProvider) async {
     final textController = TextEditingController();
-    
+    int startPage = pdfProvider.currentPage;
+    int endPage = pdfProvider.currentPage;
+    String pageRangeMode = '当前页';
+
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('针对PDF内容提问'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '当前页面: 第 ${pdfProvider.currentPage} 页',
-              style: Theme.of(context).textTheme.bodySmall,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('针对PDF内容提问'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'PDF: ${pdfProvider.fileName ?? "未命名"}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '选择页面范围',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: '当前页', label: Text('当前页')),
+                    ButtonSegment(value: '前后1页', label: Text('前后1页')),
+                    ButtonSegment(value: '前后3页', label: Text('前后3页')),
+                    ButtonSegment(value: '全部', label: Text('全部')),
+                    ButtonSegment(value: '自定义', label: Text('自定义')),
+                  ],
+                  selected: {pageRangeMode},
+                  onSelectionChanged: (Set<String> selection) {
+                    setDialogState(() {
+                      pageRangeMode = selection.first;
+                      if (pageRangeMode == '当前页') {
+                        startPage = pdfProvider.currentPage;
+                        endPage = pdfProvider.currentPage;
+                      } else if (pageRangeMode == '前后1页') {
+                        startPage = (pdfProvider.currentPage - 1).clamp(1, pdfProvider.totalPages);
+                        endPage = (pdfProvider.currentPage + 1).clamp(1, pdfProvider.totalPages);
+                      } else if (pageRangeMode == '前后3页') {
+                        startPage = (pdfProvider.currentPage - 3).clamp(1, pdfProvider.totalPages);
+                        endPage = (pdfProvider.currentPage + 3).clamp(1, pdfProvider.totalPages);
+                      } else if (pageRangeMode == '全部') {
+                        startPage = 1;
+                        endPage = pdfProvider.totalPages;
+                      }
+                    });
+                  },
+                ),
+                if (pageRangeMode == '自定义') ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            labelText: '起始页',
+                            border: OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
+                          onChanged: (value) {
+                            final page = int.tryParse(value);
+                            if (page != null) {
+                              startPage = page.clamp(1, pdfProvider.totalPages);
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('至'),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            labelText: '结束页',
+                            border: OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
+                          onChanged: (value) {
+                            final page = int.tryParse(value);
+                            if (page != null) {
+                              endPage = page.clamp(1, pdfProvider.totalPages);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '将包含第 $startPage 至 $endPage 页（共 ${pdfProvider.totalPages} 页）',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: textController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    hintText: '输入你的问题...',
+                    border: OutlineInputBorder(),
+                  ),
+                  autofocus: true,
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: textController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                hintText: '输入你的问题...',
-                border: OutlineInputBorder(),
-              ),
-              autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, textController.text),
+              child: const Text('提问'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, textController.text),
-            child: const Text('提问'),
-          ),
-        ],
       ),
     );
-    
+
     textController.dispose();
-    
+
     if (result != null && result.isNotEmpty && mounted) {
-      await _processQuestion(result, null, pdfProvider);
+      await _processQuestion(result, startPage, endPage, pdfProvider);
     }
   }
 
-  Future<void> _processQuestion(String question, String? selectedText, PdfProvider pdfProvider) async {
+  Future<void> _processQuestion(String question, int startPage, int endPage, PdfProvider pdfProvider) async {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -383,31 +473,33 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           children: [
             const CircularProgressIndicator(),
             const SizedBox(width: 16),
-            Expanded(child: Text('正在思考: $question')),
+            Expanded(child: Text('正在从第 $startPage-$endPage 页检索答案...')),
           ],
         ),
       ),
     );
-    
+
     try {
+      final contextText = await pdfProvider.getPagesText(startPage, endPage);
+
       final answer = await _llmService.generateAnswer(
         question,
-        context: selectedText,
+        context: contextText.isEmpty ? null : contextText,
         systemPrompt: '你是学习助手。根据提供的PDF内容回答问题。简洁明了。',
       );
-      
+
       if (mounted) {
         Navigator.pop(context);
-        
+
         final noteProvider = context.read<NoteProvider>();
         await noteProvider.createNote(
           content: '**问题:** $question\n\n**回答:** $answer',
           type: NoteType.manual,
           pdfPath: pdfProvider.filePath,
-          pdfPage: pdfProvider.currentPage,
+          pdfPage: startPage == endPage ? startPage : null,
         );
-        
-        _showAnswerDialog(question, answer, pdfProvider);
+
+        _showAnswerDialog(question, answer, pdfProvider, startPage, endPage);
       }
     } catch (e) {
       if (mounted) {
@@ -419,7 +511,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     }
   }
 
-  void _showAnswerDialog(String question, String answer, PdfProvider pdfProvider) {
+  void _showAnswerDialog(String question, String answer, PdfProvider pdfProvider, int startPage, int endPage) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -427,7 +519,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           children: [
             Icon(Icons.lightbulb, color: Theme.of(context).colorScheme.primary),
             const SizedBox(width: 8),
-            const Text('AI 回答'),
+            Expanded(child: Text('AI 回答 (第 $startPage-$endPage 页)')),
           ],
         ),
         content: SingleChildScrollView(
