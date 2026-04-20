@@ -15,9 +15,6 @@ import '../providers/pdf_provider.dart';
 import '../models/asr_result.dart';
 import '../models/note.dart';
 import '../models/question.dart';
-import '../models/ocr_config.dart';
-import '../widgets/asr_status_indicator.dart';
-import '../services/ocr_service.dart';
 import '../widgets/note_preview_dialog.dart';
 
 class AuxiliaryPanel extends StatefulWidget {
@@ -1201,12 +1198,6 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
       if (photo == null) return;
       
       if (!mounted) return;
-
-      final ocrService = OCRService();
-      await ocrService.init();
-      
-      String? ocrText;
-      bool isOCRing = false;
       
       final controller = TextEditingController();
       final confirmed = await showDialog<bool>(
@@ -1232,26 +1223,6 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                     ),
                   ),
                   const SizedBox(height: 12),
-                  if (ocrService.isLocalAvailable || ocrService.config.mode == OCRMode.api)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: OutlinedButton.icon(
-                        onPressed: isOCRing
-                            ? null
-                            : () async {
-                                setDialogState(() => isOCRing = true);
-                                final text = await ocrService.recognizeText(photo.path);
-                                setDialogState(() {
-                                  isOCRing = false;
-                                  ocrText = text;
-                                });
-                              },
-                        icon: isOCRing 
-                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.text_fields),
-                        label: Text(isOCRing ? '识别中...' : 'OCR识别'),
-                      ),
-                    ),
                   TextField(
                     controller: controller,
                     maxLines: 3,
@@ -1260,51 +1231,6 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                       border: OutlineInputBorder(),
                     ),
                   ),
-                  if (ocrText != null && ocrText!.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.text_snippet,
-                                size: 16,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'OCR识别结果',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const Spacer(),
-                              TextButton(
-                                onPressed: () {
-                                  controller.text = ocrText!;
-                                },
-                                child: const Text('使用'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            ocrText!.length > 200 
-                                ? '${ocrText!.substring(0, 200)}...'
-                                : ocrText!,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),

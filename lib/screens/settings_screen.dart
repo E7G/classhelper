@@ -5,9 +5,7 @@ import '../providers/asr_provider.dart';
 import '../providers/question_provider.dart';
 import '../providers/note_provider.dart';
 import '../models/llm_config.dart';
-import '../models/ocr_config.dart';
 import '../services/unified_asr_service.dart';
-import '../services/ocr_service.dart';
 import 'model_management_screen.dart';
 import 'storage_management_screen.dart';
 
@@ -40,12 +38,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isTestingConnection = false;
   late Box _settingsBox;
 
-  OCRMode _ocrMode = OCRMode.local;
-  OCRLanguage _ocrLanguage = OCRLanguage.chEn;
-  final _ocrApiUrlController = TextEditingController();
-  final _ocrApiKeyController = TextEditingController();
-  bool _ocrAutoRecognize = true;
-
   @override
   void initState() {
     super.initState();
@@ -72,19 +64,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _customApiKeyController.text = config.apiKey ?? '';
         _customModelController.text = config.model;
       }
-    });
-
-    final ocrConfigJson = _settingsBox.get('ocr_config') as Map?;
-    if (ocrConfigJson != null) {
-      final ocrConfig = OCRConfig.fromJson(Map<String, dynamic>.from(ocrConfigJson));
-      setState(() {
-        _ocrMode = ocrConfig.mode;
-        _ocrLanguage = ocrConfig.language;
-        _ocrApiUrlController.text = ocrConfig.apiUrl ?? '';
-        _ocrApiKeyController.text = ocrConfig.apiKey ?? '';
-        _ocrAutoRecognize = ocrConfig.autoOCR;
-      });
-    }
+    );
   }
 
   @override
@@ -247,115 +227,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          _buildSection(
-            title: 'OCR文字识别',
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'OCR模式',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  SegmentedButton<OCRMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: OCRMode.local,
-                        label: Text('本地模型'),
-                        icon: Icon(Icons.computer),
-                      ),
-                      ButtonSegment(
-                        value: OCRMode.api,
-                        label: Text('API'),
-                        icon: Icon(Icons.cloud),
-                      ),
-                    ],
-                    selected: {_ocrMode},
-                    onSelectionChanged: (Set<OCRMode> selection) {
-                      setState(() {
-                        _ocrMode = selection.first;
-                      });
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (_ocrMode == OCRMode.api) ...[
-                TextField(
-                  controller: _ocrApiUrlController,
-                  decoration: const InputDecoration(
-                    labelText: 'API地址',
-                    border: OutlineInputBorder(),
-                    hintText: 'https://api.example.com/ocr',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _ocrApiKeyController,
-                  decoration: const InputDecoration(
-                    labelText: 'API Key (可选)',
-                    border: OutlineInputBorder(),
-                    suffixIcon: Icon(Icons.key),
-                  ),
-                  obscureText: true,
-                ),
-              ],
-              const SizedBox(height: 12),
-              DropdownButtonFormField<OCRLanguage>(
-                value: _ocrLanguage,
-                decoration: const InputDecoration(
-                  labelText: '识别语言',
-                  border: OutlineInputBorder(),
-                ),
-                items: const [
-                  DropdownMenuItem(
-                    value: OCRLanguage.chEn,
-                    child: Text('中英混合'),
-                  ),
-                  DropdownMenuItem(
-                    value: OCRLanguage.ch,
-                    child: Text('中文'),
-                  ),
-                  DropdownMenuItem(
-                    value: OCRLanguage.en,
-                    child: Text('英文'),
-                  ),
-                  DropdownMenuItem(
-                    value: OCRLanguage.japanese,
-                    child: Text('日文'),
-                  ),
-                  DropdownMenuItem(
-                    value: OCRLanguage.korean,
-                    child: Text('韩文'),
-                  ),
-                ],
-                onChanged: (value) {
-                  setState(() {
-                    _ocrLanguage = value ?? OCRLanguage.chEn;
-                  });
-                },
-              ),
-              const SizedBox(height: 12),
-              SwitchListTile(
-                title: const Text('自动识别'),
-                subtitle: const Text('拍照后自动进行文字识别'),
-                value: _ocrAutoRecognize,
-                onChanged: (value) {
-                  setState(() {
-                    _ocrAutoRecognize = value;
-                  });
-                },
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton.icon(
-                onPressed: _saveOCRConfig,
-                icon: const Icon(Icons.save),
-                label: const Text('保存OCR配置'),
               ),
             ],
           ),
@@ -798,22 +669,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('LLM配置已保存')),
-    );
-  }
-
-  void _saveOCRConfig() {
-    final config = OCRConfig(
-      mode: _ocrMode,
-      language: _ocrLanguage,
-      apiUrl: _ocrApiUrlController.text.isEmpty ? null : _ocrApiUrlController.text,
-      apiKey: _ocrApiKeyController.text.isEmpty ? null : _ocrApiKeyController.text,
-      autoOCR: _ocrAutoRecognize,
-    );
-    
-    _settingsBox.put('ocr_config', config.toJson());
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('OCR配置已保存')),
     );
   }
 
