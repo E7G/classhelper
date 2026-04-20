@@ -15,6 +15,7 @@ import '../providers/pdf_provider.dart';
 import '../models/asr_result.dart';
 import '../models/note.dart';
 import '../models/question.dart';
+import '../widgets/asr_status_indicator.dart';
 import '../widgets/note_preview_dialog.dart';
 
 class AuxiliaryPanel extends StatefulWidget {

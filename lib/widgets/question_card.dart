@@ -93,7 +93,7 @@ class QuestionCard extends StatelessWidget {
   Widget _buildTypeChip(BuildContext context) {
     return Chip(
       label: Text(_getTypeName(question.type)),
-      backgroundColor: _getTypeColor(context).withOpacity(0.1),
+      backgroundColor: _getTypeColor(context).withValues(alpha: 0.1),
       labelStyle: TextStyle(
         color: _getTypeColor(context),
         fontSize: 12,
@@ -105,7 +105,7 @@ class QuestionCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: _getStatusColor(context).withOpacity(0.1),
+        color: _getStatusColor(context).withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(

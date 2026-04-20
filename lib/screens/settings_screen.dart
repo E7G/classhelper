@@ -64,7 +64,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _customApiKeyController.text = config.apiKey ?? '';
         _customModelController.text = config.model;
       }
-    );
+    });
   }
 
   @override

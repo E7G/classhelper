@@ -1,10 +1,7 @@
-import 'package:logger/logger.dart';
 import '../config/app_config.dart';
 import '../models/question.dart';
 
 class QuestionDetector {
-  final Logger _logger = Logger();
-  
   final List<RegExp> _questionPatterns = 
       AppConfig.questionPatterns.map((p) => RegExp(p)).toList();
   

@@ -161,7 +161,7 @@ class NoteService {
       throw Exception('Note not found: $noteId');
     }
 
-    final updatedTags = [...note.tags, ...tags].toSet().toList();
+    final updatedTags = {...note.tags, ...tags}.toList();
     final updatedNote = note.copyWith(tags: updatedTags);
 
     await _noteBox.put(noteId, updatedNote);
