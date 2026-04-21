@@ -42,8 +42,8 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 
-  void _saveCategories() {
-    Hive.box('settings').put('note_categories', _categories);
+  Future<void> _saveCategories() async {
+    await Hive.box('settings').put('note_categories', _categories);
   }
 
   void setCurrentCategory(String category) {
@@ -54,24 +54,24 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 
-  void createCategory(String name) {
+  Future<void> createCategory(String name) async {
     if (name.isNotEmpty && !_categories.contains(name)) {
       _categories.add(name);
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
     }
   }
 
-  void deleteCategory(String name) {
+  Future<void> deleteCategory(String name) async {
     if (name == 'default') return;
     if (_categories.contains(name)) {
-      _noteService.deleteNotesByCategory(name);
+      await _noteService.deleteNotesByCategory(name);
       _categories.remove(name);
       if (_currentCategory == name) {
         _currentCategory = 'default';
         _loadNotes();
       }
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
     }
   }
@@ -128,7 +128,7 @@ class NoteProvider extends ChangeNotifier {
       effectiveCategory = path.basename(pdfPath);
       if (!_categories.contains(effectiveCategory)) {
         _categories.add(effectiveCategory);
-        _saveCategories();
+        await _saveCategories();
       }
     } else {
       effectiveCategory = _currentCategory;
