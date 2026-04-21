@@ -62,7 +62,11 @@ class StrokeProvider extends ChangeNotifier {
   }
 
   Future<void> setCurrentCategory(String category) async {
-    if (_currentCategory != category && _categories.contains(category)) {
+    if (_currentCategory != category) {
+      if (!_categories.contains(category)) {
+        _categories.add(category);
+        await _saveCategories();
+      }
       _currentCategory = category;
       await _saveCategories();
       _loadStrokes();

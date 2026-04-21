@@ -151,6 +151,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                     _showDrawingTools ? Icons.draw : Icons.draw_outlined,
                   ),
                   onPressed: () {
+                    if (!_showDrawingTools) {
+                      final strokeProvider = context.read<StrokeProvider>();
+                      final category = pdfProvider.fileName ?? 'default';
+                      strokeProvider.setCurrentCategory(category);
+                    }
                     setState(() {
                       _showDrawingTools = !_showDrawingTools;
                     });
@@ -280,9 +285,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                     isEraser: strokeProvider.isEraser,
                     currentColor: strokeProvider.currentColor,
                     currentStrokeWidth: strokeProvider.currentStrokeWidth,
-                    currentCategory: strokeProvider.currentCategory,
-                    categories: strokeProvider.categories,
-                    onCategoryChanged: (cat) => strokeProvider.setCurrentCategory(cat),
                     onUndo: () => strokeProvider.undoLastStroke(),
                     onClear: () => strokeProvider.clearStrokesForPage(pdfProvider.currentPage),
                     onSave: () {

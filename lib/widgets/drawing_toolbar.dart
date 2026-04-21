@@ -11,9 +11,6 @@ class DrawingToolbar extends StatelessWidget {
   final ValueChanged<double> onStrokeWidthChanged;
   final VoidCallback onToggleEraser;
   final VoidCallback? onClose;
-  final String currentCategory;
-  final List<String> categories;
-  final ValueChanged<String> onCategoryChanged;
 
   const DrawingToolbar({
     super.key,
@@ -27,9 +24,6 @@ class DrawingToolbar extends StatelessWidget {
     required this.onStrokeWidthChanged,
     required this.onToggleEraser,
     this.onClose,
-    required this.currentCategory,
-    required this.categories,
-    required this.onCategoryChanged,
   });
 
   static const _colors = [
@@ -99,26 +93,6 @@ class DrawingToolbar extends StatelessWidget {
               ),
             ),
           )),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade400),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: DropdownButton<String>(
-              value: currentCategory,
-              underline: const SizedBox(),
-              isDense: true,
-              items: categories.map((cat) => DropdownMenuItem(
-                value: cat,
-                child: Text(cat, style: const TextStyle(fontSize: 12)),
-              )).toList(),
-              onChanged: (value) {
-                if (value != null) onCategoryChanged(value);
-              },
-            ),
-          ),
           const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.undo),
