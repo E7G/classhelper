@@ -85,15 +85,14 @@ class StrokeProvider extends ChangeNotifier {
   Future<bool> deleteCategory(String name) async {
     if (!_categories.contains(name)) return false;
 
-    if (name == 'default') {
-      _strokes.clear();
-      _saveStrokes();
-      notifyListeners();
-      return true;
-    }
+    final allStrokesJson = _strokeBox.get('pdf_strokes') as List? ?? [];
+    final remainingStrokes = allStrokesJson
+        .map((s) => Stroke.fromJson(Map<String, dynamic>.from(s as Map)))
+        .where((s) => s.category != name)
+        .toList();
+    await _strokeBox.put('pdf_strokes', remainingStrokes.map((s) => s.toJson()).toList());
 
     _strokes.removeWhere((s) => s.category == name);
-    _saveStrokes();
     _categories.remove(name);
     if (_currentCategory == name) {
       _currentCategory = 'default';

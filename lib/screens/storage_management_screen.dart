@@ -402,10 +402,12 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                   await pdfProvider.closePdf();
                 }
 
-                await Hive.box('settings').put('pdf_bookmarks', []);
-                await Hive.box('settings').put('pdf_strokes', []);
-                await Hive.box('notes').clear();
-                await Hive.box('questions').clear();
+                await Hive.box('settings').put('pdf_bookmarks', <Map<String, dynamic>>[]);
+                await Hive.box('settings').put('pdf_strokes', <Map<String, dynamic>>[]);
+
+                noteProvider.clearAllNotes();
+                questionProvider.clearAllQuestions();
+                strokeProvider.clearAllStrokes();
 
                 await pdfProvider.deleteCategory('default');
                 await noteProvider.deleteCategory('default');

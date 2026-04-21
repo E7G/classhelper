@@ -13,6 +13,8 @@ class LLMConfig {
   final int maxTokens;
   final double temperature;
   final bool isLocal;
+  final String? bingApiKey;
+  final bool searchEnhance;
 
   const LLMConfig({
     this.providerType = LLMProviderType.openai,
@@ -22,6 +24,8 @@ class LLMConfig {
     this.maxTokens = 2000,
     this.temperature = 0.7,
     this.isLocal = false,
+    this.bingApiKey,
+    this.searchEnhance = false,
   });
 
   LLMConfig copyWith({
@@ -32,6 +36,8 @@ class LLMConfig {
     int? maxTokens,
     double? temperature,
     bool? isLocal,
+    String? bingApiKey,
+    bool? searchEnhance,
   }) {
     return LLMConfig(
       providerType: providerType ?? this.providerType,
@@ -41,6 +47,8 @@ class LLMConfig {
       maxTokens: maxTokens ?? this.maxTokens,
       temperature: temperature ?? this.temperature,
       isLocal: isLocal ?? this.isLocal,
+      bingApiKey: bingApiKey ?? this.bingApiKey,
+      searchEnhance: searchEnhance ?? this.searchEnhance,
     );
   }
 

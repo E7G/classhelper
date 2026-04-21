@@ -178,6 +178,27 @@ class QuestionProvider extends ChangeNotifier {
     return question;
   }
 
+  Future<Question> addQuestionWithAnswer(String content, String answer, {String? context, QuestionType type = QuestionType.unknown, String? category}) async {
+    final question = Question(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      content: content,
+      createdAt: DateTime.now(),
+      type: type,
+      status: QuestionStatus.answered,
+      answer: answer,
+      answeredAt: DateTime.now(),
+      context: context,
+      category: category ?? _currentCategory,
+    );
+
+    await _questionBox.put(question.id, question);
+    _questions.insert(0, question);
+    _currentQuestion = question;
+    notifyListeners();
+
+    return question;
+  }
+
   void _addQuestion(Question question) async {
     await _questionBox.put(question.id, question);
     _questions.insert(0, question);

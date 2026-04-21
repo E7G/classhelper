@@ -485,7 +485,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
     try {
       final llmService = context.read<QuestionProvider>().llmService;
-      final noteProvider = context.read<NoteProvider>();
+      final questionProvider = context.read<QuestionProvider>();
       final contextText = await pdfProvider.getPagesText(startPage, endPage);
 
       final answer = await llmService.generateAnswer(
@@ -497,11 +497,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       if (mounted) {
         Navigator.pop(context);
 
-        await noteProvider.createNote(
-          content: '**问题:** $question\n\n**回答:** $answer',
-          type: NoteType.manual,
-          pdfPath: pdfProvider.filePath,
-          pdfPage: startPage == endPage ? startPage : null,
+        await questionProvider.addQuestionWithAnswer(
+          question,
+          answer,
+          context: '第 $startPage-$endPage 页',
         );
 
         _showAnswerDialog(question, answer, pdfProvider, startPage, endPage);

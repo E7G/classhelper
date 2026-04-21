@@ -4,11 +4,13 @@ import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 import '../models/llm_config.dart';
 import 'local_llm_service.dart';
+import 'bing_search_service.dart';
 
 class LLMService {
   final Logger _logger = Logger();
   final Dio _dio = Dio();
   final LocalLLMService _localLLM = LocalLLMService();
+  final BingSearchService _searchService = BingSearchService();
   
   LLMConfig _config = const LLMConfig(
     providerType: LLMProviderType.local,
@@ -32,6 +34,7 @@ class LLMService {
   Stream<String> get statusStream => _statusController.stream;
   LLMConfig get config => _config;
   LocalLLMService get localLLM => _localLLM;
+  BingSearchService get searchService => _searchService;
   bool get isModelLoading => _isLoadingModel;
   bool get isModelLoaded => _localLLM.isLoaded;
 
@@ -150,18 +153,28 @@ class LLMService {
     String question, {
     String? context,
     String? systemPrompt,
+    bool useSearch = false,
   }) async {
     await _ensureModelLoaded();
-    
+
+    String? enhancedContext = context;
+    if (useSearch || _config.searchEnhance) {
+      _logger.i('Using search enhancement for question');
+      final searchResults = await _searchService.search(question);
+      if (searchResults != null && searchResults.isNotEmpty) {
+        enhancedContext = '${context ?? ''}\n\n[网络搜索结果]\n$searchResults';
+      }
+    }
+
     switch (_config.providerType) {
       case LLMProviderType.openai:
-        return _generateOpenAIAnswer(question, context: context, systemPrompt: systemPrompt);
+        return _generateOpenAIAnswer(question, context: enhancedContext, systemPrompt: systemPrompt);
       case LLMProviderType.ollama:
-        return _generateOllamaAnswer(question, context: context, systemPrompt: systemPrompt);
+        return _generateOllamaAnswer(question, context: enhancedContext, systemPrompt: systemPrompt);
       case LLMProviderType.local:
-        return _generateLocalAnswer(question, context: context, systemPrompt: systemPrompt);
+        return _generateLocalAnswer(question, context: enhancedContext, systemPrompt: systemPrompt);
       case LLMProviderType.custom:
-        return _generateCustomAnswer(question, context: context, systemPrompt: systemPrompt);
+        return _generateCustomAnswer(question, context: enhancedContext, systemPrompt: systemPrompt);
     }
   }
 
