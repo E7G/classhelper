@@ -34,7 +34,6 @@ class StrokeProvider extends ChangeNotifier {
   void _init() {
     _strokeBox = Hive.box('settings');
     _loadCategories();
-    _loadStrokes();
   }
 
   List<String> _categories = ['default'];
@@ -43,18 +42,29 @@ class StrokeProvider extends ChangeNotifier {
 
   void _loadCategories() {
     final savedCategories = _strokeBox.get('stroke_categories') as List?;
-    if (savedCategories != null) {
+    if (savedCategories != null && savedCategories.isNotEmpty) {
       _categories = List<String>.from(savedCategories);
+      final savedCurrentCategory = _strokeBox.get('current_stroke_category') as String?;
+      if (savedCurrentCategory != null && _categories.contains(savedCurrentCategory)) {
+        _currentCategory = savedCurrentCategory;
+      } else if (!_categories.contains('default')) {
+        _categories.insert(0, 'default');
+      }
+    } else {
+      _categories = ['default'];
     }
+    _loadStrokes();
   }
 
   Future<void> _saveCategories() async {
     await _strokeBox.put('stroke_categories', _categories);
+    await _strokeBox.put('current_stroke_category', _currentCategory);
   }
 
   void setCurrentCategory(String category) {
-    if (_currentCategory != category) {
+    if (_currentCategory != category && _categories.contains(category)) {
       _currentCategory = category;
+      _saveCategories();
       _loadStrokes();
       notifyListeners();
     }
