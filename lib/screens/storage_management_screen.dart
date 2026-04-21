@@ -276,10 +276,6 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
 
               try {
                 for (final category in _selectedCategories) {
-                  if (category == 'default') {
-                    failedCount++;
-                    continue;
-                  }
                   final success = await _deleteCategoryData(category);
                   if (success) {
                     deletedCount++;
@@ -334,13 +330,6 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
             onPressed: () async {
               Navigator.pop(context);
               final messenger = ScaffoldMessenger.of(context);
-
-              if (category == 'default') {
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('无法删除默认分类')),
-                );
-                return;
-              }
 
               try {
                 final success = await _deleteCategoryData(category);
@@ -408,6 +397,10 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 final noteProvider = context.read<NoteProvider>();
                 final questionProvider = context.read<QuestionProvider>();
                 final strokeProvider = context.read<StrokeProvider>();
+
+                if (pdfProvider.isDocumentLoaded) {
+                  await pdfProvider.closePdf();
+                }
 
                 await Hive.box('settings').put('pdf_bookmarks', []);
                 await Hive.box('settings').put('pdf_strokes', []);

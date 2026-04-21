@@ -971,7 +971,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
 
     if (result != null && result.files.single.path != null && mounted) {
-      await context.read<PdfProvider>().openPdf(result.files.single.path!);
+      final pdfProvider = context.read<PdfProvider>();
+      final strokeProvider = context.read<StrokeProvider>();
+      await pdfProvider.openPdf(result.files.single.path!);
+      if (pdfProvider.fileName != null) {
+        strokeProvider.setCurrentCategory(pdfProvider.fileName!);
+      }
     }
   }
 
