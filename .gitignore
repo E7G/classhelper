@@ -80,3 +80,5 @@ assets/models/sensevoice/model.int8.onnx
 assets/models/sherpa-onnx-paraformer-zh-2023-09-14/model.int8.onnx
 assets/models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/*.onnx
 /android/.gradle
+android/.gradle/8.11.1/executionHistory/executionHistory.bin
+android/.gradle/8.11.1/fileHashes/fileHashes.bin
