@@ -72,22 +72,33 @@ class QuestionProvider extends ChangeNotifier {
   }
 
   Future<bool> deleteCategory(String name) async {
-    if (name == 'default') return false;
-    if (_categories.contains(name)) {
-      final toDelete = _questionBox.values.where((q) => q.category == name).map((q) => q.id).toList();
+    if (!_categories.contains(name)) return false;
+
+    if (name == 'default') {
+      final toDelete = _questionBox.values.where((q) => q.category == 'default').map((q) => q.id).toList();
       for (final id in toDelete) {
         await _questionBox.delete(id);
       }
-      _categories.remove(name);
-      if (_currentCategory == name) {
-        _currentCategory = 'default';
-        _loadQuestions();
-      }
-      await _saveCategories();
+      _loadQuestions();
       notifyListeners();
       return true;
     }
-    return false;
+
+    final toDelete = _questionBox.values.where((q) => q.category == name).map((q) => q.id).toList();
+    for (final id in toDelete) {
+      await _questionBox.delete(id);
+    }
+    _categories.remove(name);
+    if (_currentCategory == name) {
+      _currentCategory = 'default';
+      if (!_categories.contains('default')) {
+        _categories.insert(0, 'default');
+      }
+      _loadQuestions();
+    }
+    await _saveCategories();
+    notifyListeners();
+    return true;
   }
 
   void _loadQuestions() {

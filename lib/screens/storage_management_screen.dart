@@ -257,13 +257,6 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
   }
 
   void _deleteSelected() {
-    if (_selectedCategories.contains('default')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('选中的分类中包含默认分类，无法删除')),
-      );
-      return;
-    }
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -380,8 +373,6 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
   }
 
   Future<bool> _deleteCategoryData(String category) async {
-    if (category == 'default') return false;
-
     final pdfProvider = context.read<PdfProvider>();
     final noteProvider = context.read<NoteProvider>();
     final questionProvider = context.read<QuestionProvider>();
@@ -423,10 +414,15 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 await Hive.box('notes').clear();
                 await Hive.box('questions').clear();
 
-                pdfProvider.deleteCategory('default');
-                noteProvider.clearAllNotes();
-                questionProvider.clearAllQuestions();
-                strokeProvider.clearAllStrokes();
+                await pdfProvider.deleteCategory('default');
+                await noteProvider.deleteCategory('default');
+                await questionProvider.deleteCategory('default');
+                await strokeProvider.deleteCategory('default');
+
+                await pdfProvider.createCategory('default');
+                await noteProvider.createCategory('default');
+                await questionProvider.createCategory('default');
+                await strokeProvider.createCategory('default');
 
                 setState(() {
                   _selectedCategories.clear();
