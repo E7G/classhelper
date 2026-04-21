@@ -56,8 +56,8 @@ class PdfProvider extends ChangeNotifier {
     }
   }
 
-  void _saveCategories() {
-    _pdfBox.put('pdf_categories', _categories);
+  Future<void> _saveCategories() async {
+    await _pdfBox.put('pdf_categories', _categories);
   }
 
   void setCurrentCategory(String category) {
@@ -68,31 +68,33 @@ class PdfProvider extends ChangeNotifier {
     }
   }
 
-  void createCategory(String name) {
+  Future<void> createCategory(String name) async {
     if (name.isNotEmpty && !_categories.contains(name)) {
       _categories.add(name);
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
     }
   }
 
-  void deleteCategory(String name) {
-    if (name == 'default') return;
+  Future<bool> deleteCategory(String name) async {
+    if (name == 'default') return false;
     if (_categories.contains(name)) {
       final allBookmarks = _pdfBox.get('pdf_bookmarks') as List? ?? [];
       final remaining = allBookmarks
           .map((b) => PdfBookmark.fromJson(Map<String, dynamic>.from(b as Map)))
           .where((b) => b.category != name)
           .toList();
-      _pdfBox.put('pdf_bookmarks', remaining.map((b) => b.toJson()).toList());
+      await _pdfBox.put('pdf_bookmarks', remaining.map((b) => b.toJson()).toList());
       _categories.remove(name);
       if (_currentCategory == name) {
         _currentCategory = 'default';
         _loadBookmarks();
       }
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
+      return true;
     }
+    return false;
   }
 
   void _loadBookmarks() {

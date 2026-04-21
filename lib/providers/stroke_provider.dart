@@ -48,8 +48,8 @@ class StrokeProvider extends ChangeNotifier {
     }
   }
 
-  void _saveCategories() {
-    _strokeBox.put('stroke_categories', _categories);
+  Future<void> _saveCategories() async {
+    await _strokeBox.put('stroke_categories', _categories);
   }
 
   void setCurrentCategory(String category) {
@@ -60,16 +60,16 @@ class StrokeProvider extends ChangeNotifier {
     }
   }
 
-  void createCategory(String name) {
+  Future<void> createCategory(String name) async {
     if (name.isNotEmpty && !_categories.contains(name)) {
       _categories.add(name);
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
     }
   }
 
-  void deleteCategory(String name) {
-    if (name == 'default') return;
+  Future<bool> deleteCategory(String name) async {
+    if (name == 'default') return false;
     if (_categories.contains(name)) {
       _strokes.removeWhere((s) => s.category == name);
       _saveStrokes();
@@ -78,9 +78,11 @@ class StrokeProvider extends ChangeNotifier {
         _currentCategory = 'default';
         _loadStrokes();
       }
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
+      return true;
     }
+    return false;
   }
 
   void _loadStrokes() {

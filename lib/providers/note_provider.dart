@@ -62,8 +62,8 @@ class NoteProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> deleteCategory(String name) async {
-    if (name == 'default') return;
+  Future<bool> deleteCategory(String name) async {
+    if (name == 'default') return false;
     if (_categories.contains(name)) {
       await _noteService.deleteNotesByCategory(name);
       _categories.remove(name);
@@ -73,7 +73,9 @@ class NoteProvider extends ChangeNotifier {
       }
       await _saveCategories();
       notifyListeners();
+      return true;
     }
+    return false;
   }
 
   void _loadNotes() {

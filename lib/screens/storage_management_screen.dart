@@ -257,6 +257,13 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
   }
 
   void _deleteSelected() {
+    if (_selectedCategories.contains('default')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('选中的分类中包含默认分类，无法删除')),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -271,9 +278,21 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
             onPressed: () async {
               Navigator.pop(context);
               final messenger = ScaffoldMessenger.of(context);
+              int deletedCount = 0;
+              int failedCount = 0;
+
               try {
                 for (final category in _selectedCategories) {
-                  await _deleteCategoryData(category);
+                  if (category == 'default') {
+                    failedCount++;
+                    continue;
+                  }
+                  final success = await _deleteCategoryData(category);
+                  if (success) {
+                    deletedCount++;
+                  } else {
+                    failedCount++;
+                  }
                 }
                 setState(() {
                   _selectedCategories.clear();
@@ -281,9 +300,11 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
                 });
                 if (mounted) {
                   messenger.showSnackBar(
-                    const SnackBar(
-                      content: Text('已删除选中分类的数据'),
-                      duration: Duration(seconds: 1),
+                    SnackBar(
+                      content: Text(failedCount == 0
+                          ? '已删除 $deletedCount 个分类的数据'
+                          : '已删除 $deletedCount 个分类，$failedCount 个失败'),
+                      duration: const Duration(seconds: 2),
                     ),
                   );
                 }
@@ -320,13 +341,23 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
             onPressed: () async {
               Navigator.pop(context);
               final messenger = ScaffoldMessenger.of(context);
+
+              if (category == 'default') {
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('无法删除默认分类')),
+                );
+                return;
+              }
+
               try {
-                await _deleteCategoryData(category);
+                final success = await _deleteCategoryData(category);
                 if (mounted) {
                   messenger.showSnackBar(
                     SnackBar(
-                      content: Text('已删除分类 "$category" 的数据'),
-                      duration: const Duration(seconds: 1),
+                      content: Text(success
+                          ? '已删除分类 "$category" 的数据'
+                          : '分类 "$category" 不存在或已删除'),
+                      duration: const Duration(seconds: 2),
                     ),
                   );
                 }
@@ -348,16 +379,22 @@ class _StorageManagementScreenState extends State<StorageManagementScreen> {
     );
   }
 
-  Future<void> _deleteCategoryData(String category) async {
+  Future<bool> _deleteCategoryData(String category) async {
+    if (category == 'default') return false;
+
     final pdfProvider = context.read<PdfProvider>();
     final noteProvider = context.read<NoteProvider>();
     final questionProvider = context.read<QuestionProvider>();
     final strokeProvider = context.read<StrokeProvider>();
 
-    pdfProvider.deleteCategory(category);
-    noteProvider.deleteCategory(category);
-    questionProvider.deleteCategory(category);
-    strokeProvider.deleteCategory(category);
+    final results = await Future.wait([
+      pdfProvider.deleteCategory(category),
+      noteProvider.deleteCategory(category),
+      questionProvider.deleteCategory(category),
+      strokeProvider.deleteCategory(category),
+    ]);
+
+    return results.any((success) => success);
   }
 
   void _showClearAllDialog() {

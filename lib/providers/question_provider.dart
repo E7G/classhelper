@@ -51,8 +51,8 @@ class QuestionProvider extends ChangeNotifier {
     }
   }
 
-  void _saveCategories() {
-    _settingsBox.put('question_categories', _categories);
+  Future<void> _saveCategories() async {
+    await _settingsBox.put('question_categories', _categories);
   }
 
   void setCurrentCategory(String category) {
@@ -63,28 +63,31 @@ class QuestionProvider extends ChangeNotifier {
     }
   }
 
-  void createCategory(String name) {
+  Future<void> createCategory(String name) async {
     if (name.isNotEmpty && !_categories.contains(name)) {
       _categories.add(name);
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
     }
   }
 
-  void deleteCategory(String name) {
-    if (name == 'default') return;
+  Future<bool> deleteCategory(String name) async {
+    if (name == 'default') return false;
     if (_categories.contains(name)) {
-      _questionBox.values.where((q) => q.category == name).toList().forEach((q) {
-        _questionBox.delete(q.id);
-      });
+      final toDelete = _questionBox.values.where((q) => q.category == name).map((q) => q.id).toList();
+      for (final id in toDelete) {
+        await _questionBox.delete(id);
+      }
       _categories.remove(name);
       if (_currentCategory == name) {
         _currentCategory = 'default';
         _loadQuestions();
       }
-      _saveCategories();
+      await _saveCategories();
       notifyListeners();
+      return true;
     }
+    return false;
   }
 
   void _loadQuestions() {
