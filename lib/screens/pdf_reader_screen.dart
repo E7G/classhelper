@@ -280,6 +280,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                     isEraser: strokeProvider.isEraser,
                     currentColor: strokeProvider.currentColor,
                     currentStrokeWidth: strokeProvider.currentStrokeWidth,
+                    currentCategory: strokeProvider.currentCategory,
+                    categories: strokeProvider.categories,
+                    onCategoryChanged: (cat) => strokeProvider.setCurrentCategory(cat),
                     onUndo: () => strokeProvider.undoLastStroke(),
                     onClear: () => strokeProvider.clearStrokesForPage(pdfProvider.currentPage),
                     onSave: () {
