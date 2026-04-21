@@ -10,11 +10,11 @@ import 'package:markdown/markdown.dart' as md;
 import '../providers/pdf_provider.dart';
 import '../providers/stroke_provider.dart';
 import '../providers/note_provider.dart';
+import '../providers/question_provider.dart';
 import '../models/note.dart';
 import '../models/stroke.dart';
 import '../widgets/drawing_toolbar.dart';
 import '../widgets/note_marker.dart';
-import '../services/llm_service.dart';
 import '../screens/settings_screen.dart';
 import 'auxiliary_panel.dart';
 
@@ -30,7 +30,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _showAuxiliaryPanel = false;
   bool _showBookmarks = false;
   final _pageController = TextEditingController();
-  final _llmService = LLMService();
 
   @override
   void dispose() {
@@ -485,9 +484,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
 
     try {
+      final llmService = context.read<QuestionProvider>().llmService;
+      final noteProvider = context.read<NoteProvider>();
       final contextText = await pdfProvider.getPagesText(startPage, endPage);
 
-      final answer = await _llmService.generateAnswer(
+      final answer = await llmService.generateAnswer(
         question,
         context: contextText.isEmpty ? null : contextText,
         systemPrompt: '你是学习助手。根据提供的PDF内容回答问题。简洁明了。',
@@ -496,7 +497,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       if (mounted) {
         Navigator.pop(context);
 
-        final noteProvider = context.read<NoteProvider>();
         await noteProvider.createNote(
           content: '**问题:** $question\n\n**回答:** $answer',
           type: NoteType.manual,

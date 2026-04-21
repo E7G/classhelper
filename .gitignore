@@ -79,3 +79,4 @@ assets/models/Qwen3.5-0.8B-Q4_K_M.gguf
 assets/models/sensevoice/model.int8.onnx
 assets/models/sherpa-onnx-paraformer-zh-2023-09-14/model.int8.onnx
 assets/models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/*.onnx
+/android/.gradle
