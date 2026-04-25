@@ -48,11 +48,38 @@ jobs:
         cd dist/package
         Compress-Archive -Path * -DestinationPath ../../ClassHelper-Windows.zip
     
-    - name: Upload Windows artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload Windows Release
+      uses: softprops/action-gh-release@v1
       with:
-        name: windows-build
-        path: ClassHelper-Windows.zip
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## ClassHelper ${{ steps.get_version.outputs.VERSION }}
+          
+          ### 下载
+          - **ClassHelper-Windows.zip** - Windows 桌面版，解压即用
+          - **ClassHelper-Android.apk** - Android 安装包（等待构建完成）
+          
+          ### 使用方法
+          
+          #### Windows 版
+          1. 下载 `ClassHelper-Windows.zip`
+          2. 解压到任意目录
+          3. 双击 `classhelper.exe` 运行
+          
+          #### Android 版
+          1. 下载 `ClassHelper-Android.apk`
+          2. 安装到手机（可能需要允许未知来源）
+          3. 打开应用使用
+          
+          ### 功能特点
+          - 实时语音识别（ASR）
+          - AI 智能问答与笔记整理
+          - PDF 阅读与标注
+          - 支持本地 LLM 模型
+        files: ClassHelper-Windows.zip
+        draft: false
+        prerelease: true
 
   build-android:
     runs-on: ubuntu-latest
@@ -112,70 +139,9 @@ jobs:
     - name: Rename APK
       run: mv build/app/outputs/flutter-apk/app-release.apk ClassHelper-Android.apk
     
-    - name: Upload Android artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-build
-        path: ClassHelper-Android.apk
-
-  release:
-    needs: [build-windows, build-android]
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Get version
-      id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-    
-    - name: Download Windows artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: windows-build
-        path: ./artifacts
-    
-    - name: Download Android artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: android-build
-        path: ./artifacts
-    
-    - name: Create Release
+    - name: Upload Android Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.get_version.outputs.VERSION }}
-        name: Release ${{ steps.get_version.outputs.VERSION }}
-        body: |
-          ## ClassHelper ${{ steps.get_version.outputs.VERSION }}
-          
-          ### 下载
-          - **ClassHelper-Windows.zip** - Windows 桌面版，解压即用
-          - **ClassHelper-Android.apk** - Android 安装包
-          
-          ### 使用方法
-          
-          #### Windows 版
-          1. 下载 `ClassHelper-Windows.zip`
-          2. 解压到任意目录
-          3. 双击 `classhelper.exe` 运行
-          
-          #### Android 版
-          1. 下载 `ClassHelper-Android.apk`
-          2. 安装到手机（可能需要允许未知来源）
-          3. 打开应用使用
-          
-          ### 功能特点
-          - 实时语音识别（ASR）
-          - AI 智能问答与笔记整理
-          - PDF 阅读与标注
-          - 支持本地 LLM 模型
-          
-          ### 更新内容
-          查看 [CHANGELOG.md](./CHANGELOG.md) 了解详细更新内容。
-        files: |
-          artifacts/ClassHelper-Windows.zip
-          artifacts/ClassHelper-Android.apk
-        draft: false
-        prerelease: false
+        files: ClassHelper-Android.apk
+        prerelease: true
