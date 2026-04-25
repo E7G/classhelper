@@ -28,6 +28,17 @@ jobs:
         channel: 'stable'
         cache: true
     
+    - name: Download SenseVoice model
+      shell: bash
+      run: |
+        mkdir -p assets/models/sensevoice
+        curl -L -o sensevoice.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8.tar.bz2"
+        tar -xjf sensevoice.tar.bz2
+        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/model.int8.onnx assets/models/sensevoice/
+        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/tokens.txt assets/models/sensevoice/
+        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/silero_vad.onnx assets/models/sensevoice/ || true
+        rm -rf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8 sensevoice.tar.bz2
+    
     - name: Get dependencies
       run: flutter pub get
     
@@ -104,6 +115,16 @@ jobs:
         flutter-version: '3.41.7'
         channel: 'stable'
         cache: true
+    
+    - name: Download SenseVoice model
+      run: |
+        mkdir -p assets/models/sensevoice
+        curl -L -o sensevoice.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8.tar.bz2"
+        tar -xjf sensevoice.tar.bz2
+        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/model.int8.onnx assets/models/sensevoice/
+        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/tokens.txt assets/models/sensevoice/
+        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/silero_vad.onnx assets/models/sensevoice/ || true
+        rm -rf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8 sensevoice.tar.bz2
     
     - name: Get dependencies
       run: flutter pub get
