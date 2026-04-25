@@ -1,0 +1,175 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Get version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      shell: bash
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.24.0'
+        channel: 'stable'
+        cache: true
+    
+    - name: Get dependencies
+      run: flutter pub get
+    
+    - name: Build Windows
+      run: flutter build windows --release
+    
+    - name: Create Windows package
+      run: |
+        mkdir dist/package
+        cp -r build/windows/x64/runner/Release/* dist/package/
+        cp README.md dist/package/
+        cp LICENSE dist/package/
+        cp LOCAL_LLM_GUIDE.md dist/package/ 2>$null || true
+        cp SETUP_GUIDE.md dist/package/ 2>$null || true
+        cd dist/package
+        Compress-Archive -Path * -DestinationPath ../../ClassHelper-Windows.zip
+    
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-build
+        path: ClassHelper-Windows.zip
+
+  build-android:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Get version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.24.0'
+        channel: 'stable'
+        cache: true
+    
+    - name: Get dependencies
+      run: flutter pub get
+    
+    - name: Decode keystore
+      if: ${{ env.KEYSTORE_BASE64 != '' }}
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      run: |
+        echo "$KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.jks
+    
+    - name: Create key.properties
+      if: ${{ env.KEYSTORE_BASE64 != '' }}
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      run: |
+        cat > android/key.properties << EOF
+        storePassword=$KEYSTORE_PASSWORD
+        keyPassword=$KEY_PASSWORD
+        keyAlias=$KEY_ALIAS
+        storeFile=release-keystore.jks
+        EOF
+    
+    - name: Build Android APK
+      run: flutter build apk --release
+    
+    - name: Rename APK
+      run: mv build/app/outputs/flutter-apk/app-release.apk ClassHelper-Android.apk
+    
+    - name: Upload Android artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-build
+        path: ClassHelper-Android.apk
+
+  release:
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Get version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: windows-build
+        path: ./artifacts
+    
+    - name: Download Android artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: android-build
+        path: ./artifacts
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## ClassHelper ${{ steps.get_version.outputs.VERSION }}
+          
+          ### 下载
+          - **ClassHelper-Windows.zip** - Windows 桌面版，解压即用
+          - **ClassHelper-Android.apk** - Android 安装包
+          
+          ### 使用方法
+          
+          #### Windows 版
+          1. 下载 `ClassHelper-Windows.zip`
+          2. 解压到任意目录
+          3. 双击 `classhelper.exe` 运行
+          
+          #### Android 版
+          1. 下载 `ClassHelper-Android.apk`
+          2. 安装到手机（可能需要允许未知来源）
+          3. 打开应用使用
+          
+          ### 功能特点
+          - 实时语音识别（ASR）
+          - AI 智能问答与笔记整理
+          - PDF 阅读与标注
+          - 支持本地 LLM 模型
+          
+          ### 更新内容
+          查看 [CHANGELOG.md](./CHANGELOG.md) 了解详细更新内容。
+        files: |
+          artifacts/ClassHelper-Windows.zip
+          artifacts/ClassHelper-Android.apk
+        draft: false
+        prerelease: false

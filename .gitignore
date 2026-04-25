@@ -87,3 +87,9 @@ android/.gradle/8.11.1/fileHashes/fileHashes.bin
 android/.gradle/8.11.1/executionHistory/executionHistory.bin
 android/.gradle/8.11.1/fileHashes/fileHashes.bin
 android/.gradle/8.11.1/fileHashes/resourceHashesCache.bin
+
+# Android signing
+android/key.properties
+*.jks
+*.keystore
+keystore_base64.txt
