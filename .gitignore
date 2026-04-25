@@ -98,3 +98,4 @@ keystore_base64.txt
 assets/models/qwen3_asr/*.onnx
 assets/models/sensevoice/*.onnx
 qwen3_asr.tar.bz2
+/assets/models
