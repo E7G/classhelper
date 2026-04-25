@@ -17,6 +17,7 @@ import '../models/note.dart';
 import '../models/question.dart';
 import '../widgets/asr_status_indicator.dart';
 import '../widgets/note_preview_dialog.dart';
+import '../widgets/question_preview_dialog.dart';
 
 class AuxiliaryPanel extends StatefulWidget {
   const AuxiliaryPanel({super.key});
@@ -542,84 +543,98 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
     return Card(
       key: ValueKey(question.id),
       margin: const EdgeInsets.only(bottom: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: _getStatusColor(question.status).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () => _showQuestionPreview(question, provider),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _getStatusColor(question.status).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _getStatusName(question.status),
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: _getStatusColor(question.status),
+                      ),
+                    ),
                   ),
-                  child: Text(
-                    _getStatusName(question.status),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: _getStatusColor(question.status),
+                  const Spacer(),
+                  _buildMiniButton(
+                    icon: Icons.refresh,
+                    tooltip: '重新生成',
+                    onPressed: () => provider.regenerateAnswer(question.id),
+                  ),
+                  _buildMiniButton(
+                    icon: Icons.note_add,
+                    tooltip: '保存为笔记',
+                    onPressed: () => _saveQuestionAsNote(question),
+                  ),
+                  _buildMiniButton(
+                    icon: Icons.delete_outline,
+                    tooltip: '删除',
+                    onPressed: () => _confirmDeleteQuestion(question, provider),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                question.content,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (question.answer != null) ...[
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: MarkdownBody(
+                    data: question.answer!,
+                    styleSheet: MarkdownStyleSheet(
+                      p: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
                 ),
-                const Spacer(),
-                _buildMiniButton(
-                  icon: Icons.refresh,
-                  tooltip: '重新生成',
-                  onPressed: () => provider.regenerateAnswer(question.id),
-                ),
-                _buildMiniButton(
-                  icon: Icons.note_add,
-                  tooltip: '保存为笔记',
-                  onPressed: () => _saveQuestionAsNote(question),
-                ),
-                _buildMiniButton(
-                  icon: Icons.delete_outline,
-                  tooltip: '删除',
-                  onPressed: () => _confirmDeleteQuestion(question, provider),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              question.content,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (question.answer != null) ...[
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: MarkdownBody(
-                  data: question.answer!,
-                  styleSheet: MarkdownStyleSheet(
-                    p: Theme.of(context).textTheme.bodySmall,
+              ] else if (provider.isGenerating &&
+                  provider.currentQuestion?.id == question.id)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Center(
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ),
                 ),
-              ),
-            ] else if (provider.isGenerating &&
-                provider.currentQuestion?.id == question.id)
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Center(
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  void _showQuestionPreview(Question question, QuestionProvider provider) {
+    QuestionPreviewDialog.show(
+      context,
+      question: question,
+      onRegenerate: () => provider.regenerateAnswer(question.id),
+      onDelete: () => _confirmDeleteQuestion(question, provider),
+      onSaveAsNote: () => _saveQuestionAsNote(question),
     );
   }
 

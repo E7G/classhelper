@@ -86,7 +86,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           if (!pdfProvider.isDocumentLoaded) {
             return Row(
               children: [
-                Expanded(child: _buildEmptyState()),
+                Expanded(child: _buildEmptyState(pdfProvider)),
                 if (_showAuxiliaryPanel && MediaQuery.of(context).size.width > 600)
                   _buildAuxiliaryPanel(),
               ],
@@ -178,16 +178,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                         ? Icons.view_sidebar
                         : Icons.view_sidebar_outlined,
                   ),
-                  onPressed: () {
-                    final width = MediaQuery.of(context).size.width;
-                    if (width > 600) {
-                      setState(() {
-                        _showAuxiliaryPanel = !_showAuxiliaryPanel;
-                      });
-                    } else {
-                      _showAuxiliaryPanelAsSheet(context);
-                    }
-                  },
+                  onPressed: () => _handleAuxiliaryPanelToggle(pdfProvider),
                   tooltip: '辅助工具',
                 ),
                 IconButton(
@@ -207,7 +198,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(PdfProvider pdfProvider) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -237,11 +228,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1),
           const SizedBox(height: 16),
           OutlinedButton.icon(
-            onPressed: () {
-              setState(() {
-                _showAuxiliaryPanel = true;
-              });
-            },
+            onPressed: () => _handleAuxiliaryPanelToggle(pdfProvider),
             icon: const Icon(Icons.mic),
             label: const Text('打开辅助工具'),
           ),
@@ -501,6 +488,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           question,
           answer,
           context: '第 $startPage-$endPage 页',
+          category: pdfProvider.currentCategory,
         );
 
         _showAnswerDialog(question, answer, pdfProvider, startPage, endPage);
@@ -720,7 +708,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         if (pageNotes.isEmpty) return const SizedBox.shrink();
 
         return Positioned(
-          right: 16,
+          left: 16,
           bottom: 80,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -842,6 +830,90 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         ),
       ),
       child: const AuxiliaryPanel(),
+    );
+  }
+
+  void _handleAuxiliaryPanelToggle(PdfProvider pdfProvider) async {
+    if (!pdfProvider.isDocumentLoaded) {
+      final categoryName = await _showCategoryNameDialog();
+      if (categoryName == null || categoryName.isEmpty) return;
+
+      if (!mounted) return;
+      
+      final questionProvider = context.read<QuestionProvider>();
+      final noteProvider = context.read<NoteProvider>();
+      final strokeProvider = context.read<StrokeProvider>();
+
+      await questionProvider.createCategory(categoryName);
+      questionProvider.setCurrentCategory(categoryName);
+
+      await noteProvider.createCategory(categoryName);
+      noteProvider.setCurrentCategory(categoryName);
+
+      await strokeProvider.createCategory(categoryName);
+      await strokeProvider.setCurrentCategory(categoryName);
+    }
+
+    if (!mounted) return;
+    
+    final width = MediaQuery.of(context).size.width;
+    if (width > 600) {
+      setState(() {
+        _showAuxiliaryPanel = !_showAuxiliaryPanel;
+      });
+    } else {
+      _showAuxiliaryPanelAsSheet(context);
+    }
+  }
+
+  Future<String?> _showCategoryNameDialog() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('为资料命名'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '请为当前资料输入一个名称，以便管理和查找',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: '例如：数学笔记、英语单词...',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (value) {
+                if (value.trim().isNotEmpty) {
+                  Navigator.pop(context, value.trim());
+                }
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(context, name);
+              }
+            },
+            child: const Text('确定'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -972,9 +1044,21 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     if (result != null && result.files.single.path != null && mounted) {
       final pdfProvider = context.read<PdfProvider>();
       final strokeProvider = context.read<StrokeProvider>();
+      final questionProvider = context.read<QuestionProvider>();
+      final noteProvider = context.read<NoteProvider>();
+      
       await pdfProvider.openPdf(result.files.single.path!);
+      
       if (pdfProvider.fileName != null) {
-        strokeProvider.setCurrentCategory(pdfProvider.fileName!);
+        final category = pdfProvider.fileName!;
+        
+        strokeProvider.setCurrentCategory(category);
+        
+        await questionProvider.createCategory(category);
+        questionProvider.setCurrentCategory(category);
+        
+        await noteProvider.createCategory(category);
+        noteProvider.setCurrentCategory(category);
       }
     }
   }

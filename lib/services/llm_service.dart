@@ -210,7 +210,7 @@ class LLMService {
       final choices = data['choices'] as List;
       
       if (choices.isNotEmpty) {
-        return choices[0]['message']['content'] as String;
+        return _removeThinkTags(choices[0]['message']['content'] as String);
       }
       
       throw Exception('未获取到有效回答');
@@ -313,8 +313,12 @@ class LLMService {
         headers['Authorization'] = 'Bearer ${_config.apiKey}';
       }
 
+      final apiUrl = _config.apiUrl.endsWith('/chat/completions') 
+          ? _config.apiUrl 
+          : '${_config.apiUrl}/chat/completions';
+
       final response = await _dio.post(
-        '${_config.apiUrl}/chat/completions',
+        apiUrl,
         options: Options(headers: headers),
         data: {
           'model': _config.model,
@@ -328,7 +332,7 @@ class LLMService {
       final choices = data['choices'] as List;
       
       if (choices.isNotEmpty) {
-        return choices[0]['message']['content'] as String;
+        return _removeThinkTags(choices[0]['message']['content'] as String);
       }
       
       throw Exception('未获取到有效回答');
@@ -392,6 +396,8 @@ class LLMService {
       );
 
       final stream = response.data.stream as Stream<List<int>>;
+      var buffer = '';
+      var inThink = false;
       
       await for (final chunk in stream) {
         final text = utf8.decode(chunk);
@@ -411,12 +417,63 @@ class LLMService {
                 final content = delta?['content'] as String?;
                 
                 if (content != null) {
-                  yield content;
+                  buffer += content;
+                  
+                  if (inThink) {
+                    final endIndex = buffer.indexOf('</think');
+                    if (endIndex != -1) {
+                      final closeBracket = buffer.indexOf('>', endIndex);
+                      if (closeBracket != -1) {
+                        buffer = buffer.substring(closeBracket + 1);
+                        inThink = false;
+                      }
+                    } else {
+                      buffer = '';
+                      continue;
+                    }
+                  }
+                  
+                  while (buffer.contains('<think')) {
+                    final startIndex = buffer.indexOf('<think');
+                    final closeBracket = buffer.indexOf('>', startIndex);
+                    
+                    if (closeBracket != -1) {
+                      final endIndex = buffer.indexOf('</think');
+                      if (endIndex != -1 && endIndex > closeBracket) {
+                        final endCloseBracket = buffer.indexOf('>', endIndex);
+                        if (endCloseBracket != -1) {
+                          final before = buffer.substring(0, startIndex);
+                          final after = buffer.substring(endCloseBracket + 1);
+                          buffer = before + after;
+                        } else {
+                          buffer = buffer.substring(0, startIndex);
+                          inThink = true;
+                          break;
+                        }
+                      } else {
+                        buffer = buffer.substring(0, startIndex);
+                        inThink = true;
+                        break;
+                      }
+                    } else {
+                      break;
+                    }
+                  }
+                  
+                  if (buffer.isNotEmpty && !inThink) {
+                    final output = buffer;
+                    buffer = '';
+                    yield output;
+                  }
                 }
               }
             } catch (_) {}
           }
         }
+      }
+      
+      if (buffer.isNotEmpty && !inThink) {
+        yield buffer;
       }
     } catch (e) {
       _logger.e('OpenAI stream error: $e');
@@ -511,8 +568,12 @@ class LLMService {
         headers['Authorization'] = 'Bearer ${_config.apiKey}';
       }
 
+      final apiUrl = _config.apiUrl.endsWith('/chat/completions') 
+          ? _config.apiUrl 
+          : '${_config.apiUrl}/chat/completions';
+
       final response = await _dio.post(
-        '${_config.apiUrl}/chat/completions',
+        apiUrl,
         options: Options(
           headers: headers,
           responseType: ResponseType.stream,
@@ -527,6 +588,8 @@ class LLMService {
       );
 
       final stream = response.data.stream as Stream<List<int>>;
+      var buffer = '';
+      var inThink = false;
       
       await for (final chunk in stream) {
         final text = utf8.decode(chunk);
@@ -546,12 +609,63 @@ class LLMService {
                 final content = delta?['content'] as String?;
                 
                 if (content != null) {
-                  yield content;
+                  buffer += content;
+                  
+                  if (inThink) {
+                    final endIndex = buffer.indexOf('</think');
+                    if (endIndex != -1) {
+                      final closeBracket = buffer.indexOf('>', endIndex);
+                      if (closeBracket != -1) {
+                        buffer = buffer.substring(closeBracket + 1);
+                        inThink = false;
+                      }
+                    } else {
+                      buffer = '';
+                      continue;
+                    }
+                  }
+                  
+                  while (buffer.contains('<think')) {
+                    final startIndex = buffer.indexOf('<think');
+                    final closeBracket = buffer.indexOf('>', startIndex);
+                    
+                    if (closeBracket != -1) {
+                      final endIndex = buffer.indexOf('</think');
+                      if (endIndex != -1 && endIndex > closeBracket) {
+                        final endCloseBracket = buffer.indexOf('>', endIndex);
+                        if (endCloseBracket != -1) {
+                          final before = buffer.substring(0, startIndex);
+                          final after = buffer.substring(endCloseBracket + 1);
+                          buffer = before + after;
+                        } else {
+                          buffer = buffer.substring(0, startIndex);
+                          inThink = true;
+                          break;
+                        }
+                      } else {
+                        buffer = buffer.substring(0, startIndex);
+                        inThink = true;
+                        break;
+                      }
+                    } else {
+                      break;
+                    }
+                  }
+                  
+                  if (buffer.isNotEmpty && !inThink) {
+                    final output = buffer;
+                    buffer = '';
+                    yield output;
+                  }
                 }
               }
             } catch (_) {}
           }
         }
+      }
+      
+      if (buffer.isNotEmpty && !inThink) {
+        yield buffer;
       }
     } catch (e) {
       _logger.e('Custom stream error: $e');
@@ -617,7 +731,7 @@ class LLMService {
     final choices = data['choices'] as List;
     
     if (choices.isNotEmpty) {
-      return choices[0]['message']['content'] as String;
+      return _removeThinkTags(choices[0]['message']['content'] as String);
     }
     
     throw Exception('未获取到有效摘要');
@@ -696,7 +810,7 @@ class LLMService {
     final choices = data['choices'] as List;
     
     if (choices.isNotEmpty) {
-      return choices[0]['message']['content'] as String;
+      return _removeThinkTags(choices[0]['message']['content'] as String);
     }
     
     throw Exception('未获取到有效摘要');
@@ -981,17 +1095,31 @@ class LLMService {
 
   Future<bool> _testCustomConnection() async {
     try {
-      final headers = <String, String>{};
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
       if (_config.apiKey != null && _config.apiKey!.isNotEmpty) {
         headers['Authorization'] = 'Bearer ${_config.apiKey}';
       }
       
-      final response = await _dio.get(
-        '${_config.apiUrl}/models',
+      final apiUrl = _config.apiUrl.endsWith('/chat/completions') 
+          ? _config.apiUrl 
+          : '${_config.apiUrl}/chat/completions';
+      
+      final response = await _dio.post(
+        apiUrl,
         options: Options(headers: headers),
+        data: {
+          'model': _config.model,
+          'messages': [
+            {'role': 'user', 'content': 'Hi'}
+          ],
+          'max_tokens': 5,
+        },
       );
       return response.statusCode == 200;
     } catch (e) {
+      _logger.e('Custom connection test failed: $e');
       return false;
     }
   }
