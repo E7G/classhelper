@@ -313,9 +313,7 @@ class LLMService {
         headers['Authorization'] = 'Bearer ${_config.apiKey}';
       }
 
-      final apiUrl = _config.apiUrl.endsWith('/chat/completions') 
-          ? _config.apiUrl 
-          : '${_config.apiUrl}/chat/completions';
+      final apiUrl = _getCustomApiUrl();
 
       final response = await _dio.post(
         apiUrl,
@@ -340,6 +338,22 @@ class LLMService {
       _logger.e('Custom API error: $e');
       rethrow;
     }
+  }
+
+  String _getCustomApiUrl() {
+    final url = _config.apiUrl;
+    if (url.contains('/chat/completions') || 
+        url.contains('/chatcompletion') ||
+        url.endsWith('/v1') ||
+        url.split('/').length > 4) {
+      if (url.endsWith('/v1')) {
+        return '$url/chat/completions';
+      }
+      if (url.contains('/chat/completions') || url.contains('/chatcompletion')) {
+        return url;
+      }
+    }
+    return '$url/v1/chat/completions';
   }
 
   Stream<String> generateAnswerStream(
@@ -568,9 +582,7 @@ class LLMService {
         headers['Authorization'] = 'Bearer ${_config.apiKey}';
       }
 
-      final apiUrl = _config.apiUrl.endsWith('/chat/completions') 
-          ? _config.apiUrl 
-          : '${_config.apiUrl}/chat/completions';
+      final apiUrl = _getCustomApiUrl();
 
       final response = await _dio.post(
         apiUrl,
@@ -1102,9 +1114,7 @@ class LLMService {
         headers['Authorization'] = 'Bearer ${_config.apiKey}';
       }
       
-      final apiUrl = _config.apiUrl.endsWith('/chat/completions') 
-          ? _config.apiUrl 
-          : '${_config.apiUrl}/chat/completions';
+      final apiUrl = _getCustomApiUrl();
       
       final response = await _dio.post(
         apiUrl,

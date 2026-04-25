@@ -55,7 +55,7 @@ class SherpaASRService {
 
   Future<String> get _modelDirectory async {
     final appDir = await getApplicationSupportDirectory();
-    return '${appDir.path}/sensevoice_model';
+    return '${appDir.path}/qwen3_asr_model';
   }
 
   Future<bool> initialize() async {
@@ -68,11 +68,13 @@ class SherpaASRService {
       sherpa.initBindings();
       
       final modelDir = await _modelDirectory;
-      final modelPath = '$modelDir/model.int8.onnx';
-      final tokensPath = '$modelDir/tokens.txt';
+      final convFrontendPath = '$modelDir/conv_frontend.onnx';
+      final encoderPath = '$modelDir/encoder.int8.onnx';
+      final decoderPath = '$modelDir/decoder.int8.onnx';
+      final tokenizerPath = '$modelDir/tokenizer';
       final vadPath = '$modelDir/silero_vad.onnx';
       
-      if (!await File(modelPath).exists()) {
+      if (!await File(convFrontendPath).exists()) {
         _progressController.add(0.1);
         await _copyModelFromAssets(modelDir);
       }
@@ -102,12 +104,14 @@ class SherpaASRService {
       _buffer = sherpa.CircularBuffer(capacity: 30 * _sampleRate);
       
       final modelConfig = sherpa.OfflineModelConfig(
-        senseVoice: sherpa.OfflineSenseVoiceModelConfig(
-          model: modelPath,
-          language: 'auto',
-          useInverseTextNormalization: true,
+        qwen3Asr: sherpa.OfflineQwen3AsrModelConfig(
+          convFrontend: convFrontendPath,
+          encoder: encoderPath,
+          decoder: decoderPath,
+          tokenizer: tokenizerPath,
+          maxNewTokens: 512,
         ),
-        tokens: tokensPath,
+        tokens: '',
         numThreads: 4,
         provider: 'cpu',
         debug: false,
@@ -123,11 +127,11 @@ class SherpaASRService {
       _progressController.add(1.0);
       _isInitialized = true;
       _updateStatus(SherpaASRStatus.initialized);
-      _logger.i('SenseVoice initialized successfully');
+      _logger.i('Qwen3-ASR initialized successfully');
       
       return true;
     } catch (e) {
-      _logger.e('Failed to initialize SenseVoice: $e');
+      _logger.e('Failed to initialize Qwen3-ASR: $e');
       _updateStatus(SherpaASRStatus.error);
       _errorController.add('初始化失败: $e');
       return false;
@@ -141,20 +145,45 @@ class SherpaASRService {
     }
 
     final files = [
-      'model.int8.onnx',
-      'tokens.txt',
+      'conv_frontend.onnx',
+      'encoder.int8.onnx',
+      'decoder.int8.onnx',
       'silero_vad.onnx',
     ];
 
     for (final fileName in files) {
       try {
-        final data = await rootBundle.load('assets/models/sensevoice/$fileName');
+        final data = await rootBundle.load('assets/models/qwen3_asr/$fileName');
         final bytes = data.buffer.asUint8List();
         final file = File('$targetDir/$fileName');
         await file.writeAsBytes(bytes);
         _logger.i('Copied $fileName to $targetDir');
       } catch (e) {
         _logger.e('Failed to copy $fileName: $e');
+        rethrow;
+      }
+    }
+
+    final tokenizerDir = Directory('$targetDir/tokenizer');
+    if (!await tokenizerDir.exists()) {
+      await tokenizerDir.create(recursive: true);
+    }
+
+    final tokenizerFiles = [
+      'merges.txt',
+      'tokenizer_config.json',
+      'vocab.json',
+    ];
+
+    for (final fileName in tokenizerFiles) {
+      try {
+        final data = await rootBundle.load('assets/models/qwen3_asr/tokenizer/$fileName');
+        final bytes = data.buffer.asUint8List();
+        final file = File('$targetDir/tokenizer/$fileName');
+        await file.writeAsBytes(bytes);
+        _logger.i('Copied tokenizer/$fileName to $targetDir');
+      } catch (e) {
+        _logger.e('Failed to copy tokenizer/$fileName: $e');
         rethrow;
       }
     }
@@ -252,7 +281,7 @@ class SherpaASRService {
         
         _isListening = true;
         _updateStatus(SherpaASRStatus.listening);
-        _logger.i('Started listening with SenseVoice + VAD');
+        _logger.i('Started listening with Qwen3-ASR + VAD');
       } else {
         _errorController.add('没有麦克风权限');
         _logger.e('Microphone permission not granted');

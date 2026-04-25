@@ -60,4 +60,5 @@ flutter:
   
   assets:
     - assets/config/
-    - assets/models/sensevoice/
+    - assets/models/qwen3_asr/
+    - assets/models/qwen3_asr/tokenizer/

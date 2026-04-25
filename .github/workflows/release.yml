@@ -28,16 +28,18 @@ jobs:
         channel: 'stable'
         cache: true
     
-    - name: Download SenseVoice model
+    - name: Download Qwen3-ASR model
       shell: bash
       run: |
-        mkdir -p assets/models/sensevoice
-        curl -L -o sensevoice.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8.tar.bz2"
-        tar -xjf sensevoice.tar.bz2
-        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/model.int8.onnx assets/models/sensevoice/
-        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/tokens.txt assets/models/sensevoice/
-        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/silero_vad.onnx assets/models/sensevoice/ || true
-        rm -rf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8 sensevoice.tar.bz2
+        mkdir -p assets/models/qwen3_asr
+        curl -L -o qwen3_asr.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
+        tar -xjf qwen3_asr.tar.bz2
+        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/conv_frontend.onnx assets/models/qwen3_asr/
+        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/encoder.int8.onnx assets/models/qwen3_asr/
+        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/decoder.int8.onnx assets/models/qwen3_asr/
+        cp -r sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/tokenizer assets/models/qwen3_asr/
+        curl -L -o assets/models/qwen3_asr/silero_vad.onnx "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+        rm -rf sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25 qwen3_asr.tar.bz2
     
     - name: Get dependencies
       run: flutter pub get
@@ -84,7 +86,7 @@ jobs:
           3. 打开应用使用
           
           ### 功能特点
-          - 实时语音识别（ASR）
+          - 实时语音识别（ASR）- 使用 Qwen3-ASR 模型
           - AI 智能问答与笔记整理
           - PDF 阅读与标注
           - 支持本地 LLM 模型
@@ -116,15 +118,17 @@ jobs:
         channel: 'stable'
         cache: true
     
-    - name: Download SenseVoice model
+    - name: Download Qwen3-ASR model
       run: |
-        mkdir -p assets/models/sensevoice
-        curl -L -o sensevoice.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8.tar.bz2"
-        tar -xjf sensevoice.tar.bz2
-        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/model.int8.onnx assets/models/sensevoice/
-        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/tokens.txt assets/models/sensevoice/
-        cp sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8/silero_vad.onnx assets/models/sensevoice/ || true
-        rm -rf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8 sensevoice.tar.bz2
+        mkdir -p assets/models/qwen3_asr
+        curl -L -o qwen3_asr.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
+        tar -xjf qwen3_asr.tar.bz2
+        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/conv_frontend.onnx assets/models/qwen3_asr/
+        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/encoder.int8.onnx assets/models/qwen3_asr/
+        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/decoder.int8.onnx assets/models/qwen3_asr/
+        cp -r sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/tokenizer assets/models/qwen3_asr/
+        curl -L -o assets/models/qwen3_asr/silero_vad.onnx "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+        rm -rf sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25 qwen3_asr.tar.bz2
     
     - name: Get dependencies
       run: flutter pub get

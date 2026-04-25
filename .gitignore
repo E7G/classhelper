@@ -93,3 +93,8 @@ android/key.properties
 *.jks
 *.keystore
 keystore_base64.txt
+
+# ASR models (downloaded during build)
+assets/models/qwen3_asr/*.onnx
+assets/models/sensevoice/*.onnx
+qwen3_asr.tar.bz2
