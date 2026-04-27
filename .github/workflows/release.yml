@@ -28,19 +28,6 @@ jobs:
         channel: 'stable'
         cache: true
     
-    - name: Download Qwen3-ASR model
-      shell: bash
-      run: |
-        mkdir -p assets/models/qwen3_asr
-        curl -L -o qwen3_asr.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
-        tar -xjf qwen3_asr.tar.bz2
-        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/conv_frontend.onnx assets/models/qwen3_asr/
-        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/encoder.int8.onnx assets/models/qwen3_asr/
-        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/decoder.int8.onnx assets/models/qwen3_asr/
-        cp -r sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/tokenizer assets/models/qwen3_asr/
-        curl -L -o assets/models/qwen3_asr/silero_vad.onnx "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-        rm -rf sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25 qwen3_asr.tar.bz2
-    
     - name: Get dependencies
       run: flutter pub get
     
@@ -79,11 +66,21 @@ jobs:
           1. 下载 `ClassHelper-Windows.zip`
           2. 解压到任意目录
           3. 双击 `classhelper.exe` 运行
+          4. 首次使用请在"设置" → "模型管理"中下载所需模型
           
           #### Android 版
           1. 下载 `ClassHelper-Android.apk`
           2. 安装到手机（可能需要允许未知来源）
           3. 打开应用使用
+          4. 首次使用请在"设置" → "模型管理"中下载所需模型
+          
+          ### 首次使用
+          应用启动后需要下载模型：
+          - **ASR 语音识别模型** - 约 940MB（支持 ModelScope 或 GitHub 下载）
+          - **VAD 语音活动检测模型** - 约 2MB
+          - **LLM 大语言模型** - 约 500MB（可选，用于本地问答）
+          
+          > 💡 国内用户建议选择 ModelScope 作为下载来源，速度更快。
           
           ### 功能特点
           - 实时语音识别（ASR）- 使用 Qwen3-ASR 模型
@@ -117,18 +114,6 @@ jobs:
         flutter-version: '3.41.7'
         channel: 'stable'
         cache: true
-    
-    - name: Download Qwen3-ASR model
-      run: |
-        mkdir -p assets/models/qwen3_asr
-        curl -L -o qwen3_asr.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
-        tar -xjf qwen3_asr.tar.bz2
-        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/conv_frontend.onnx assets/models/qwen3_asr/
-        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/encoder.int8.onnx assets/models/qwen3_asr/
-        cp sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/decoder.int8.onnx assets/models/qwen3_asr/
-        cp -r sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/tokenizer assets/models/qwen3_asr/
-        curl -L -o assets/models/qwen3_asr/silero_vad.onnx "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-        rm -rf sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25 qwen3_asr.tar.bz2
     
     - name: Get dependencies
       run: flutter pub get
