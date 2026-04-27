@@ -144,7 +144,10 @@ class UnifiedASRService {
 
   Future<void> connect() async {
     if (_mode == ASRMode.local) {
-      await _localASR.initialize();
+      final success = await _localASR.initialize();
+      if (!success) {
+        throw Exception('ASR模型初始化失败，请检查是否已下载模型');
+      }
     } else {
       await _remoteASR.connect();
     }

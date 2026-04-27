@@ -5,6 +5,7 @@ import '../providers/asr_provider.dart';
 import '../providers/question_provider.dart';
 import '../providers/note_provider.dart';
 import '../models/llm_config.dart';
+import '../models/asr_model_config.dart';
 import '../services/unified_asr_service.dart';
 import 'model_management_screen.dart';
 import 'storage_management_screen.dart';
@@ -180,16 +181,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 12),
               Consumer<ASRProvider>(
                 builder: (context, asr, _) {
-                  return ElevatedButton.icon(
-                    onPressed: asr.status.index <= 1
-                        ? () => _connectASR()
-                        : () => _disconnectASR(),
-                    icon: Icon(
-                      asr.status.index <= 1 ? Icons.link : Icons.link_off,
-                    ),
-                    label: Text(
-                      asr.status.index <= 1 ? '连接' : '断开',
-                    ),
+                  return Column(
+                    children: [
+                      if (asr.errorMessage != null) ...[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.errorContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.error_outline,
+                                size: 18,
+                                color: Theme.of(context).colorScheme.onErrorContainer,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  asr.errorMessage!,
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.onErrorContainer,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      if (asr.isLoading) ...[
+                        LinearProgressIndicator(value: asr.loadProgress),
+                        const SizedBox(height: 8),
+                        Text(
+                          '正在加载模型... ${(asr.loadProgress * 100).toStringAsFixed(0)}%',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      ElevatedButton.icon(
+                        onPressed: asr.status.index <= 1
+                            ? () => _connectASR()
+                            : () => _disconnectASR(),
+                        icon: Icon(
+                          asr.status.index <= 1 ? Icons.link : Icons.link_off,
+                        ),
+                        label: Text(
+                          asr.status.index <= 1 ? '连接' : '断开',
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -284,6 +328,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildModelStatusCard() {
+    final asrConfigJson = _settingsBox.get('asr_model_config');
+    ASRModelConfig? asrConfig;
+    if (asrConfigJson != null) {
+      try {
+        asrConfig = ASRModelConfig.fromJson(
+            Map<String, dynamic>.from(asrConfigJson as Map));
+      } catch (_) {}
+    }
+
+    final asrReady = asrConfig?.isReady ?? false;
+    final statusText = asrReady
+        ? 'ASR模型: 已就绪 (${asrConfig!.sizeLabel})'
+        : asrConfig?.isModelReady == true
+            ? 'ASR模型: 已下载，缺少VAD模型'
+            : 'ASR模型: 未下载';
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -292,18 +352,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.check_circle,
+          Icon(
+            asrReady ? Icons.check_circle : Icons.error_outline,
             size: 18,
-            color: Colors.green,
+            color: asrReady ? Colors.green : Theme.of(context).colorScheme.error,
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'ASR模型: 已内置',
+              statusText,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
+          if (!asrReady)
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const ModelManagementScreen()),
+                );
+              },
+              child: const Text('去下载'),
+            ),
         ],
       ),
     );

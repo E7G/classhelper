@@ -5,19 +5,20 @@
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android-lightgrey)](https://github.com)
 
-一款基于 Flutter + FunASR + LLM 的智能课堂助手应用，支持实时语音识别、智能问答和笔记管理。
+一款基于 Flutter + Sherpa-onnx + LLM 的智能课堂助手应用，支持实时语音识别、智能问答和笔记管理。
 
 ## ✨ 功能特性
 
 ### 🎤 实时语音识别
-- 基于 FunASR/Sherpa-onnx 的高精度中文语音识别
+- 基于 Sherpa-onnx Qwen3-ASR 的高精度中文语音识别
 - 支持本地离线识别，保护隐私
 - 实时显示识别结果
+- VAD 语音活动检测
 
 ### 🤖 智能问答
 - 自动检测课堂中的提问
 - 支持多种 LLM 后端：
-  - **本地模型** - 内置 Qwen3.5-0.8B，开箱即用
+  - **本地模型** - 支持 Qwen3.5-0.8B 等 GGUF 格式模型
   - **Ollama** - 支持各种开源大模型
   - **OpenAI API** - 支持 GPT-4 等模型
   - **自定义 API** - 兼容 OpenAI 格式的任意 API
@@ -52,7 +53,7 @@
 | 类别 | 技术 |
 |------|------|
 | 前端框架 | Flutter 3.0+ |
-| 语音识别 | FunASR / Sherpa-onnx |
+| 语音识别 | Sherpa-onnx (Qwen3-ASR) |
 | 大语言模型 | OpenAI API / Ollama / llama.cpp |
 | 状态管理 | Provider / Riverpod |
 | 本地存储 | Hive |
@@ -64,6 +65,7 @@
 - Flutter SDK >= 3.0.0
 - Dart SDK >= 3.0.0
 - Windows 10+ 或 Android 5.0+
+- 约 1.5GB 存储空间（用于模型文件）
 
 ## 🚀 快速开始
 
@@ -103,6 +105,48 @@ flutter build windows
 flutter build apk
 ```
 
+### 5. 下载模型
+
+首次使用需要在应用内下载模型：
+
+1. 打开应用，进入 **设置** → **模型管理**
+2. 下载 **ASR 语音识别模型**（支持 ModelScope 或 GitHub 来源）
+3. 下载 **VAD 语音活动检测模型**
+4. 下载 **LLM 大语言模型**（如需本地问答功能）
+
+> 💡 **提示**：国内用户建议选择 ModelScope 作为下载来源，速度更快。如选择 GitHub，可配置加速站（如 `https://ghproxy.com/`）。
+
+## 📦 模型说明
+
+### ASR 语音识别模型
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| Qwen3-ASR 0.6B | ~940MB | 轻量级，速度快，适合低配置设备 |
+| Qwen3-ASR 1.7B | ~2GB | 高精度，适合中高配置设备 |
+
+**下载来源**：
+- **ModelScope**: `zengshuishui/Qwen3-ASR-onnx`（国内直连）
+- **GitHub**: `k2-fsa/sherpa-onnx`（可能需要加速站）
+
+### VAD 模型
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| Silero VAD | ~2MB | 语音活动检测，ASR 必需 |
+
+**下载来源**：
+- **ModelScope**: `xnnehang/k2-fsa-silero-vad`（国内直连）
+- **GitHub**: `k2-fsa/sherpa-onnx`（可能需要加速站）
+
+### LLM 大语言模型
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| Qwen3.5-0.8B Q4_K_M | ~500MB | 轻量级本地模型，适合课堂助手场景 |
+
+支持任意 GGUF 格式模型，可通过文件选择器加载本地模型文件。
+
 ## 📖 详细文档
 
 - [安装配置指南](SETUP_GUIDE.md) - 详细的安装和配置说明
@@ -112,15 +156,15 @@ flutter build apk
 ## 🎯 推荐配置
 
 ### 低配置设备 (4GB RAM)
-- ASR: 本地模式
-- LLM: Qwen3.5-0.8B (内置)
+- ASR: Qwen3-ASR 0.6B
+- LLM: Qwen3.5-0.8B Q4_K_M
 
 ### 中等配置设备 (8GB RAM)
-- ASR: 本地模式
+- ASR: Qwen3-ASR 0.6B 或 1.7B
 - LLM: Qwen2.5 1.5B 或 Ollama
 
 ### 高配置设备 (16GB+ RAM)
-- ASR: 本地模式
+- ASR: Qwen3-ASR 1.7B
 - LLM: Qwen2 7B 或更大的模型
 
 ## 📁 项目结构
@@ -133,11 +177,13 @@ lib/
 │   └── app_config.dart    # 配置常量
 ├── models/                # 数据模型
 ├── services/              # 业务服务
-│   ├── asr_service.dart   # ASR 服务
+│   ├── sherpa_asr_service.dart  # ASR 服务
 │   ├── llm_service.dart   # LLM 服务
 │   └── ...
 ├── providers/             # 状态管理
 ├── screens/               # 页面
+│   ├── model_management_screen.dart  # 模型管理
+│   └── ...
 └── widgets/               # 组件
 ```
 
@@ -181,8 +227,8 @@ flutter packages pub run build_runner build
 本项目使用了以下开源项目：
 
 - [Flutter](https://flutter.dev/) - Google UI 框架
-- [FunASR](https://github.com/alibaba-damo-academy/FunASR) - 阿里巴巴开源语音识别
 - [Sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) - 离线语音识别框架
+- [Qwen3-ASR](https://github.com/QwenLM/Qwen3-Audio) - 通义千问语音模型
 - [Ollama](https://ollama.ai/) - 本地大模型运行环境
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) - LLM 推理引擎
 - [Qwen](https://github.com/QwenLM/Qwen) - 通义千问大模型
