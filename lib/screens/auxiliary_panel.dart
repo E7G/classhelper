@@ -85,16 +85,6 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
 
     if (detected != null && mounted) {
       _tabController.animateTo(2);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('自动检测到问题：${detected.content.length > 30 ? '${detected.content.substring(0, 30)}...' : detected.content}'),
-          duration: const Duration(seconds: 2),
-          action: SnackBarAction(
-            label: '查看',
-            onPressed: () => _tabController.animateTo(2),
-          ),
-        ),
-      );
     }
   }
 
@@ -371,19 +361,51 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _createManualNote,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('添加笔记'),
+                ),
               ],
             ),
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(8),
-          itemCount: notes.length,
-          key: const PageStorageKey('notes_list'),
-          itemBuilder: (context, index) {
-            final note = notes[index];
-            return _buildNoteCard(note, noteProvider, pdfProvider);
-          },
+        return Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text(
+                    '${notes.length} 条笔记',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _createManualNote,
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('添加笔记', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(8),
+                itemCount: notes.length,
+                key: const PageStorageKey('notes_list'),
+                itemBuilder: (context, index) {
+                  final note = notes[index];
+                  return _buildNoteCard(note, noteProvider, pdfProvider);
+                },
+              ),
+            ),
+          ],
         );
       },
     );
@@ -902,11 +924,6 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                             onPressed: _organizeNotesWithLLM,
                             tooltip: 'AI整理笔记',
                           ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.add, size: 20),
-                    onPressed: _createManualNote,
-                    tooltip: '手动添加笔记',
                   ),
                   IconButton(
                     icon: const Icon(Icons.camera_alt, size: 20),
