@@ -19,6 +19,13 @@ class QuestionProvider extends ChangeNotifier {
   LLMConfig _llmConfig = const LLMConfig();
   String _currentCategory = 'default';
 
+  bool _autoDetectEnabled = false;
+  double _autoDetectConfidenceThreshold = 0.6;
+  DateTime? _lastAutoDetectTime;
+  static const Duration _autoDetectCooldown = Duration(seconds: 3);
+  final List<Question> _autoDetectQueue = [];
+  bool _isProcessingAutoDetectQueue = false;
+
   List<Question> get questions => List.unmodifiable(_questions);
   Question? get currentQuestion => _currentQuestion;
   String get currentAnswer => _currentAnswer;
@@ -27,6 +34,8 @@ class QuestionProvider extends ChangeNotifier {
   LLMConfig get llmConfig => _llmConfig;
   LLMService get llmService => _llmService;
   String get currentCategory => _currentCategory;
+  bool get autoDetectEnabled => _autoDetectEnabled;
+  double get autoDetectConfidenceThreshold => _autoDetectConfidenceThreshold;
 
   QuestionProvider() {
     _init();
@@ -38,6 +47,7 @@ class QuestionProvider extends ChangeNotifier {
     _loadCategories();
     _loadQuestions();
     _loadLLMConfig();
+    _loadAutoDetectConfig();
   }
 
   List<String> _categories = ['default'];
@@ -150,12 +160,124 @@ class QuestionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _loadAutoDetectConfig() {
+    _autoDetectEnabled = _settingsBox.get('auto_detect_enabled') as bool? ?? false;
+    _autoDetectConfidenceThreshold = _settingsBox.get('auto_detect_confidence_threshold') as double? ?? 0.6;
+  }
+
+  void _saveAutoDetectConfig() {
+    _settingsBox.put('auto_detect_enabled', _autoDetectEnabled);
+    _settingsBox.put('auto_detect_confidence_threshold', _autoDetectConfidenceThreshold);
+  }
+
+  void setAutoDetectEnabled(bool enabled) {
+    if (_autoDetectEnabled != enabled) {
+      _autoDetectEnabled = enabled;
+      _saveAutoDetectConfig();
+      notifyListeners();
+    }
+  }
+
+  void setAutoDetectConfidenceThreshold(double threshold) {
+    threshold = threshold.clamp(0.3, 1.0);
+    if (_autoDetectConfidenceThreshold != threshold) {
+      _autoDetectConfidenceThreshold = threshold;
+      _saveAutoDetectConfig();
+      notifyListeners();
+    }
+  }
+
   void detectQuestion(String text, {String? context}) {
     final question = _detector.detect(text);
 
     if (question != null) {
       _addQuestion(question.copyWith(context: context));
     }
+  }
+
+  Question? processASRResult(
+    String text, {
+    String? asrContext,
+    String? pdfContent,
+    String? pdfFileName,
+  }) {
+    if (!_autoDetectEnabled) return null;
+    if (text.trim().isEmpty) return null;
+
+    final now = DateTime.now();
+    if (_lastAutoDetectTime != null &&
+        now.difference(_lastAutoDetectTime!) < _autoDetectCooldown) {
+      return null;
+    }
+
+    final question = _detector.detect(
+      text,
+      confidenceThreshold: _autoDetectConfidenceThreshold,
+    );
+
+    if (question == null) return null;
+
+    _lastAutoDetectTime = now;
+
+    final richContext = _buildRichContext(
+      asrContext: asrContext,
+      pdfContent: pdfContent,
+      pdfFileName: pdfFileName,
+    );
+
+    final enrichedQuestion = question.copyWith(
+      context: richContext,
+      category: pdfFileName ?? _currentCategory,
+    );
+
+    _addQuestionToAutoDetectQueue(enrichedQuestion);
+    return enrichedQuestion;
+  }
+
+  String _buildRichContext({
+    String? asrContext,
+    String? pdfContent,
+    String? pdfFileName,
+  }) {
+    final parts = <String>[];
+
+    if (pdfFileName != null && pdfFileName.isNotEmpty) {
+      parts.add('当前课程资料：$pdfFileName');
+    }
+
+    if (pdfContent != null && pdfContent.isNotEmpty) {
+      parts.add('课程资料内容：\n$pdfContent');
+    }
+
+    if (asrContext != null && asrContext.isNotEmpty) {
+      parts.add('课堂语音上下文：\n$asrContext');
+    }
+
+    return parts.join('\n\n');
+  }
+
+  void _addQuestionToAutoDetectQueue(Question question) async {
+    await _questionBox.put(question.id, question);
+    _questions.insert(0, question);
+    _currentQuestion = question;
+    notifyListeners();
+
+    _autoDetectQueue.add(question);
+    _processAutoDetectQueue();
+  }
+
+  void _processAutoDetectQueue() async {
+    if (_isProcessingAutoDetectQueue) return;
+    if (_autoDetectQueue.isEmpty) return;
+
+    _isProcessingAutoDetectQueue = true;
+
+    while (_autoDetectQueue.isNotEmpty) {
+      final question = _autoDetectQueue.removeAt(0);
+      await _generateAnswer(question);
+    }
+
+    _isProcessingAutoDetectQueue = false;
   }
 
   Future<Question> createQuestion(String content, {String? context, QuestionType type = QuestionType.unknown, String? category}) async {
@@ -221,9 +343,12 @@ class QuestionProvider extends ChangeNotifier {
       );
       await _questionBox.put(question.id, updatedQuestion);
 
+      final systemPrompt = _buildSystemPrompt(question.context);
+
       final answer = await _llmService.generateAnswer(
         question.content,
         context: question.context,
+        systemPrompt: systemPrompt,
       );
 
       final answeredQuestion = updatedQuestion.copyWith(
@@ -254,6 +379,25 @@ class QuestionProvider extends ChangeNotifier {
 
       notifyListeners();
     }
+  }
+
+  String _buildSystemPrompt(String? context) {
+    final hasPdfContext = context != null && context.contains('课程资料内容');
+    final hasAsrContext = context != null && context.contains('课堂语音上下文');
+
+    if (hasPdfContext && hasAsrContext) {
+      return '你是课堂助手。根据课程资料内容和课堂语音上下文，简洁准确地回答问题。'
+          '优先参考课程资料中的内容，结合语音上下文理解问题的背景。'
+          '如果资料中没有相关信息，可以基于语音上下文进行合理推断，但要说明来源。';
+    } else if (hasPdfContext) {
+      return '你是课堂助手。根据课程资料内容，简洁准确地回答问题。'
+          '优先参考资料中的内容，如果资料中没有相关信息，可以基于常识回答，但要说明来源。';
+    } else if (hasAsrContext) {
+      return '你是课堂助手。根据课堂语音上下文，简洁准确地回答问题。'
+          '结合上下文理解问题的背景，给出合理的回答。';
+    }
+
+    return '你是课堂助手。简洁回答问题。';
   }
 
   Future<void> regenerateAnswer(String questionId) async {

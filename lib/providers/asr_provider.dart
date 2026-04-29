@@ -22,6 +22,8 @@ class ASRProvider extends ChangeNotifier {
   double _loadProgress = 0.0;
   bool _backgroundMode = false;
 
+  void Function(ASRResult result)? onNewResult;
+
   ASRStatus get status => _status;
   String get currentText => _currentText;
   List<ASRResult> get results => List.unmodifiable(_results);
@@ -47,6 +49,7 @@ class ASRProvider extends ChangeNotifier {
       if (result.isFinal) {
         if (_isValidResult(result.text)) {
           _results.add(result);
+          onNewResult?.call(result);
           if (_backgroundMode) {
             _backgroundService.updateNotification(
               title: '智能课堂助手',

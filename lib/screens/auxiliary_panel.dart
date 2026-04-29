@@ -35,10 +35,75 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupASRAutoDetect();
+    });
+  }
+
+  void _setupASRAutoDetect() {
+    final asr = context.read<ASRProvider>();
+    asr.onNewResult = _handleASRNewResult;
+  }
+
+  void _handleASRNewResult(ASRResult result) {
+    final questionProvider = context.read<QuestionProvider>();
+    if (!questionProvider.autoDetectEnabled) return;
+
+    final pdfProvider = context.read<PdfProvider>();
+
+    final asrProvider = context.read<ASRProvider>();
+    final recentTexts = asrProvider.results
+        .skip(asrProvider.results.length > 5 ? asrProvider.results.length - 5 : 0)
+        .map((r) => r.text)
+        .toList();
+    final asrContext = recentTexts.join('\n');
+
+    _processASRWithPdfContext(result.text, asrContext, pdfProvider, questionProvider);
+  }
+
+  Future<void> _processASRWithPdfContext(
+    String text,
+    String asrContext,
+    PdfProvider pdfProvider,
+    QuestionProvider questionProvider,
+  ) async {
+    String? pdfContent;
+    String? pdfFileName;
+
+    if (pdfProvider.isDocumentLoaded) {
+      pdfContent = await pdfProvider.getSurroundingPagesText(range: 2);
+      pdfFileName = pdfProvider.fileName;
+    }
+
+    final detected = questionProvider.processASRResult(
+      text,
+      asrContext: asrContext,
+      pdfContent: pdfContent,
+      pdfFileName: pdfFileName,
+    );
+
+    if (detected != null && mounted) {
+      _tabController.animateTo(2);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('自动检测到问题：${detected.content.length > 30 ? '${detected.content.substring(0, 30)}...' : detected.content}'),
+          duration: const Duration(seconds: 2),
+          action: SnackBarAction(
+            label: '查看',
+            onPressed: () => _tabController.animateTo(2),
+          ),
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
+    try {
+      final asr = context.read<ASRProvider>();
+      asr.onNewResult = null;
+    } catch (_) {}
     _tabController.dispose();
     super.dispose();
   }
@@ -639,8 +704,8 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
   }
 
   Widget _buildControlBar() {
-    return Consumer<ASRProvider>(
-      builder: (context, asr, _) {
+    return Consumer2<ASRProvider, QuestionProvider>(
+      builder: (context, asr, questionProvider, _) {
         return Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
@@ -687,6 +752,45 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                     ],
                   ),
                 ).animate().fadeIn().slideY(begin: -0.5),
+              if (questionProvider.autoDetectEnabled)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.psychology,
+                        size: 14,
+                        color: Theme.of(context).colorScheme.onTertiaryContainer,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '自动检测问题已开启',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Theme.of(context).colorScheme.onTertiaryContainer,
+                          ),
+                        ),
+                      ),
+                      if (questionProvider.isGenerating)
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Theme.of(context).colorScheme.onTertiaryContainer,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               Row(
                 children: [
                   Expanded(
@@ -756,6 +860,30 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                       ),
                     ),
                   const SizedBox(width: 8),
+                  Tooltip(
+                    message: questionProvider.autoDetectEnabled ? '自动检测问题已开启' : '自动检测问题已关闭',
+                    child: InkWell(
+                      onTap: () => _toggleAutoDetect(questionProvider),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: questionProvider.autoDetectEnabled
+                              ? Theme.of(context).colorScheme.tertiaryContainer
+                              : Theme.of(context).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          questionProvider.autoDetectEnabled ? Icons.psychology : Icons.psychology_outlined,
+                          size: 20,
+                          color: questionProvider.autoDetectEnabled
+                              ? Theme.of(context).colorScheme.onTertiaryContainer
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 200),
                     child: _isOrganizing
@@ -792,6 +920,18 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
         );
       },
     );
+  }
+
+  void _toggleAutoDetect(QuestionProvider questionProvider) {
+    questionProvider.setAutoDetectEnabled(!questionProvider.autoDetectEnabled);
+    if (questionProvider.autoDetectEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已开启自动检测问题，ASR识别到问题将自动调用AI回答'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _editAsrResult(ASRResult result, ASRProvider asr) async {
