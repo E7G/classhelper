@@ -12,18 +12,20 @@ class QuestionDetector {
 
   Question? detect(String text, {double confidenceThreshold = 0.6}) {
     if (text.trim().isEmpty) return null;
-    
+
+    if (_isFillerQuestion(text)) return null;
+
     final confidence = _calculateConfidence(text);
-    
+
     if (confidence < confidenceThreshold) {
       return null;
     }
-    
+
     final questionType = _classifyQuestion(text);
     final context = _buildContext();
-    
+
     _addToContext(text);
-    
+
     return Question(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       content: text,
@@ -33,6 +35,36 @@ class QuestionDetector {
       confidence: confidence,
       context: context,
     );
+  }
+
+  bool _isFillerQuestion(String text) {
+    final trimmed = text.trim();
+
+    final fillerPatterns = [
+      RegExp(r'^.{0,4}(对吧|是吧|好吧|行吧|是吗|对吗|不是吗|对不对|是不是|行不行|好不好|可以吧|应该吧|可能吧|大概吧|也许吧|对吧[？?]?|是吧[？?]?)$'),
+      RegExp(r'^.{0,2}(吧|呢|嘛)[？?]?$'),
+      RegExp(r'^(嗯|啊|哦|哈|哎|唉|嘿)[？?]?$'),
+      RegExp(r'^(然后呢|所以呢|接下来呢|那又怎样)$'),
+      RegExp(r'^.{0,3}(对吧|是吧).{0,2}$'),
+    ];
+
+    for (final pattern in fillerPatterns) {
+      if (pattern.hasMatch(trimmed)) {
+        return true;
+      }
+    }
+
+    final fillerExact = [
+      '对吧', '是吧', '好吧', '行吧', '是吗', '对吗', '不是吗',
+      '对不对', '是不是', '行不行', '好不好', '可以吧', '应该吧',
+      '可能吧', '大概吧', '也许吧', '然后呢', '所以呢',
+      '对吧？', '是吧？', '对吧?', '是吧?',
+    ];
+    if (fillerExact.contains(trimmed)) {
+      return true;
+    }
+
+    return false;
   }
 
   double _calculateConfidence(String text) {
