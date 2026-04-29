@@ -563,6 +563,14 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                     icon: const Icon(Icons.add, size: 16),
                     label: const Text('添加问题', style: TextStyle(fontSize: 12)),
                   ),
+                  TextButton.icon(
+                    onPressed: () => _clearAllQuestions(questionProvider),
+                    icon: const Icon(Icons.delete_sweep, size: 16),
+                    label: const Text('清空', style: TextStyle(fontSize: 12)),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -570,6 +578,8 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
               child: ListView.builder(
                 padding: const EdgeInsets.all(8),
                 itemCount: questionProvider.questions.length,
+                addAutomaticKeepAlives: false,
+                addRepaintBoundaries: true,
                 itemBuilder: (context, index) {
                   final question = questionProvider.questions[index];
                   return _buildQuestionCard(question, questionProvider);
@@ -627,92 +637,109 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
   }
 
   Widget _buildQuestionCard(Question question, QuestionProvider provider) {
-    return Card(
-      key: ValueKey(question.id),
-      margin: const EdgeInsets.only(bottom: 6),
-      child: InkWell(
-        onTap: () => _showQuestionPreview(question, provider),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
+    return RepaintBoundary(
+      child: Card(
+        key: ValueKey(question.id),
+        margin: const EdgeInsets.only(bottom: 6),
+        child: InkWell(
+          onTap: () => _showQuestionPreview(question, provider),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(question.status).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _getStatusName(question.status),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: _getStatusColor(question.status),
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    _buildMiniButton(
+                      icon: Icons.refresh,
+                      tooltip: '重新生成',
+                      onPressed: () => provider.regenerateAnswer(question.id),
+                    ),
+                    _buildMiniButton(
+                      icon: Icons.note_add,
+                      tooltip: '保存为笔记',
+                      onPressed: () => _saveQuestionAsNote(question),
+                    ),
+                    _buildMiniButton(
+                      icon: Icons.delete_outline,
+                      tooltip: '删除',
+                      onPressed: () => _confirmDeleteQuestion(question, provider),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  question.content,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (question.answer != null) ...[
+                  const SizedBox(height: 4),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: _getStatusColor(question.status).withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      _getStatusName(question.status),
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: _getStatusColor(question.status),
+                      _stripMarkdown(question.answer!),
+                      style: Theme.of(context).textTheme.bodySmall,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ] else if (provider.isGenerating &&
+                    provider.currentQuestion?.id == question.id)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Center(
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
                     ),
                   ),
-                  const Spacer(),
-                  _buildMiniButton(
-                    icon: Icons.refresh,
-                    tooltip: '重新生成',
-                    onPressed: () => provider.regenerateAnswer(question.id),
-                  ),
-                  _buildMiniButton(
-                    icon: Icons.note_add,
-                    tooltip: '保存为笔记',
-                    onPressed: () => _saveQuestionAsNote(question),
-                  ),
-                  _buildMiniButton(
-                    icon: Icons.delete_outline,
-                    tooltip: '删除',
-                    onPressed: () => _confirmDeleteQuestion(question, provider),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                question.content,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (question.answer != null) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: MarkdownBody(
-                    data: question.answer!,
-                    styleSheet: MarkdownStyleSheet(
-                      p: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ),
-              ] else if (provider.isGenerating &&
-                  provider.currentQuestion?.id == question.id)
-                const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: Center(
-                    child: SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
+  }
+
+  String _stripMarkdown(String md) {
+    return md
+        .replaceAll(RegExp(r'#+\s'), '')
+        .replaceAll(RegExp(r'\*\*(.*?)\*\*'), r'$1')
+        .replaceAll(RegExp(r'\*(.*?)\*'), r'$1')
+        .replaceAll(RegExp(r'`{1,3}[^`]*`{1,3}'), '')
+        .replaceAll(RegExp(r'\[([^\]]*)\]\([^)]*\)'), r'$1')
+        .replaceAll(RegExp(r'^[-*+]\s', multiLine: true), '')
+        .replaceAll(RegExp(r'^\d+\.\s', multiLine: true), '')
+        .replaceAll(RegExp(r'^>\s?', multiLine: true), '')
+        .replaceAll(RegExp(r'\n{2,}'), '\n')
+        .trim();
   }
 
   void _showQuestionPreview(Question question, QuestionProvider provider) {
@@ -1716,6 +1743,41 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
           ? () => _showFullScreenImage(context, note.imagePath!, heroTag: 'note_preview_image_${note.id}')
           : null,
     );
+  }
+
+  Future<void> _clearAllQuestions(QuestionProvider provider) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清空问题'),
+        content: const Text('确定要清空所有问题吗？此操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      provider.clearAllQuestions();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已清空所有问题'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _confirmDeleteQuestion(Question question, QuestionProvider provider) async {

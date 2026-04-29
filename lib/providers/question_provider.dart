@@ -22,9 +22,11 @@ class QuestionProvider extends ChangeNotifier {
   bool _autoDetectEnabled = false;
   double _autoDetectConfidenceThreshold = 0.6;
   DateTime? _lastAutoDetectTime;
-  static const Duration _autoDetectCooldown = Duration(seconds: 3);
+  static const Duration _autoDetectCooldown = Duration(seconds: 8);
   final List<Question> _autoDetectQueue = [];
   bool _isProcessingAutoDetectQueue = false;
+  String? _lastDetectedContent;
+  static const int _minDetectTextLength = 6;
 
   List<Question> get questions => List.unmodifiable(_questions);
   Question? get currentQuestion => _currentQuestion;
@@ -203,10 +205,16 @@ class QuestionProvider extends ChangeNotifier {
   }) {
     if (!_autoDetectEnabled) return null;
     if (text.trim().isEmpty) return null;
+    if (text.trim().length < _minDetectTextLength) return null;
 
     final now = DateTime.now();
     if (_lastAutoDetectTime != null &&
         now.difference(_lastAutoDetectTime!) < _autoDetectCooldown) {
+      return null;
+    }
+
+    if (_lastDetectedContent != null &&
+        _isSimilarText(text, _lastDetectedContent!)) {
       return null;
     }
 
@@ -218,6 +226,7 @@ class QuestionProvider extends ChangeNotifier {
     if (question == null) return null;
 
     _lastAutoDetectTime = now;
+    _lastDetectedContent = text;
 
     final richContext = _buildRichContext(
       asrContext: asrContext,
@@ -232,6 +241,23 @@ class QuestionProvider extends ChangeNotifier {
 
     _addQuestionToAutoDetectQueue(enrichedQuestion);
     return enrichedQuestion;
+  }
+
+  bool _isSimilarText(String a, String b) {
+    final aTrimmed = a.trim();
+    final bTrimmed = b.trim();
+    if (aTrimmed == bTrimmed) return true;
+    if (aTrimmed.contains(bTrimmed) || bTrimmed.contains(aTrimmed)) return true;
+    final shorter = aTrimmed.length < bTrimmed.length ? aTrimmed : bTrimmed;
+    final longer = aTrimmed.length < bTrimmed.length ? bTrimmed : aTrimmed;
+    if (shorter.length >= 4) {
+      int commonChars = 0;
+      for (int i = 0; i < shorter.length; i++) {
+        if (longer.contains(shorter[i])) commonChars++;
+      }
+      if (commonChars / shorter.length > 0.8) return true;
+    }
+    return false;
   }
 
   String _buildRichContext({

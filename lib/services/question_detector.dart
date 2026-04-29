@@ -64,6 +64,13 @@ class QuestionDetector {
       return true;
     }
 
+    final fillerEndings = ['对吧', '是吧', '好吧', '行吧', '对吧？', '是吧？', '对吧?', '是吧?'];
+    for (final ending in fillerEndings) {
+      if (trimmed.endsWith(ending) && trimmed.length <= ending.length + 6) {
+        return true;
+      }
+    }
+
     return false;
   }
 

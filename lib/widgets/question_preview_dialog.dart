@@ -25,14 +25,20 @@ class QuestionPreviewDialog extends StatelessWidget {
     VoidCallback? onDelete,
     VoidCallback? onSaveAsNote,
   }) {
-    return showDialog(
+    return showGeneralDialog(
       context: context,
-      builder: (context) => QuestionPreviewDialog(
-        question: question,
-        onRegenerate: onRegenerate,
-        onDelete: onDelete,
-        onSaveAsNote: onSaveAsNote,
-      ),
+      barrierDismissible: true,
+      barrierLabel: '关闭',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 150),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return QuestionPreviewDialog(
+          question: question,
+          onRegenerate: onRegenerate,
+          onDelete: onDelete,
+          onSaveAsNote: onSaveAsNote,
+        );
+      },
     );
   }
 
@@ -103,10 +109,15 @@ class QuestionPreviewDialog extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () => Navigator.pop(context),
-            iconSize: 20,
+          SizedBox(
+            width: 48,
+            height: 48,
+            child: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.pop(context),
+              iconSize: 22,
+              padding: EdgeInsets.zero,
+            ),
           ),
         ],
       ),
@@ -252,7 +263,7 @@ class QuestionPreviewDialog extends StatelessWidget {
             shrinkWrap: true,
             softLineBreak: true,
             selectable: true,
-            extensionSet: md.ExtensionSet.gitHubWeb,
+            extensionSet: md.ExtensionSet.gitHubFlavored,
             styleSheet: MarkdownStyleSheet(
               p: Theme.of(context).textTheme.bodyMedium,
               h1: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
