@@ -409,7 +409,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final asrReady = asrConfig?.isReady ?? false;
     final statusText = asrReady
-        ? 'ASR模型: 已就绪 (${asrConfig!.sizeLabel})'
+        ? 'ASR模型: 已就绪 (${asrConfig!.modelTypeLabel})'
         : asrConfig?.isModelReady == true
             ? 'ASR模型: 已下载，缺少VAD模型'
             : 'ASR模型: 未下载';

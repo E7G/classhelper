@@ -99,7 +99,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
   Future<String> get _asrModelDirectory async {
     final appDir = await getApplicationSupportDirectory();
-    final dir = Directory('${appDir.path}/qwen3_asr_model');
+    final dir = Directory('${appDir.path}/asr_model');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -292,7 +292,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
       final newConfig = ASRModelConfig(
         source: config.source,
-        size: config.size,
+        modelType: config.modelType,
         githubProxyUrl: config.githubProxyUrl,
         modelDir: targetDir,
         vadModelPath: config.vadModelPath,
@@ -343,9 +343,12 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
       String targetDir, ASRModelConfig config) async {
     final allFiles = [...config.modelscopeAsrFiles, ...config.modelscopeTokenizerFiles];
     final totalFiles = allFiles.length;
-    final tokenizerDir = Directory('$targetDir/tokenizer');
-    if (!await tokenizerDir.exists()) {
-      await tokenizerDir.create(recursive: true);
+
+    if (config.modelType == ASRModelType.qwen3Asr) {
+      final tokenizerDir = Directory('$targetDir/tokenizer');
+      if (!await tokenizerDir.exists()) {
+        await tokenizerDir.create(recursive: true);
+      }
     }
 
     for (var i = 0; i < allFiles.length; i++) {
@@ -356,6 +359,12 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
       String savePath;
       if (filePath.startsWith('tokenizer/')) {
         savePath = '$targetDir/tokenizer/$fileName';
+      } else if (filePath.contains('/')) {
+        final subDir = Directory('$targetDir/${filePath.substring(0, filePath.lastIndexOf('/'))}');
+        if (!await subDir.exists()) {
+          await subDir.create(recursive: true);
+        }
+        savePath = '$targetDir/$filePath';
       } else {
         savePath = '$targetDir/$fileName';
       }
@@ -387,7 +396,13 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
   Future<void> _downloadAsrFromGithub(
       String targetDir, ASRModelConfig config) async {
     final modelsDir = await _modelsDirectory;
-    final archiveName = '${config.asrModelArchiveName}.tar.bz2';
+    String archiveName;
+    switch (config.modelType) {
+      case ASRModelType.senseVoice:
+        archiveName = '${config.senseVoiceArchiveName}.tar.bz2';
+      case ASRModelType.qwen3Asr:
+        archiveName = 'sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2';
+    }
     final archivePath = '$modelsDir/$archiveName';
 
     setState(() {
@@ -419,7 +434,13 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
     final bz2Data = BZip2Decoder().decodeBytes(archiveBytes);
     final tarArchive = TarDecoder().decodeBytes(bz2Data);
 
-    final extractDirName = config.asrModelArchiveName;
+    String extractDirName;
+    switch (config.modelType) {
+      case ASRModelType.senseVoice:
+        extractDirName = config.senseVoiceArchiveName;
+      case ASRModelType.qwen3Asr:
+        extractDirName = 'sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25';
+    }
 
     for (final file in tarArchive) {
       final relativePath = file.name;
@@ -482,7 +503,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
       final newConfig = ASRModelConfig(
         source: config.source,
-        size: config.size,
+        modelType: config.modelType,
         githubProxyUrl: config.githubProxyUrl,
         modelDir: config.modelDir,
         vadModelPath: savePath,
@@ -575,7 +596,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
         }
         final newConfig = ASRModelConfig(
           source: _asrConfig.source,
-          size: _asrConfig.size,
+          modelType: _asrConfig.modelType,
           githubProxyUrl: _asrConfig.githubProxyUrl,
           modelDir: _asrConfig.modelDir,
           vadModelPath: null,
@@ -632,7 +653,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
         }
         final newConfig = ASRModelConfig(
           source: _asrConfig.source,
-          size: _asrConfig.size,
+          modelType: _asrConfig.modelType,
           githubProxyUrl: _asrConfig.githubProxyUrl,
           modelDir: null,
           vadModelPath: vadWasInModelDir ? null : vadPath,
@@ -656,18 +677,27 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
   Future<void> _selectAsrModelDir() async {
     try {
+      final config = _asrConfig;
+      final senseVoiceFiles = ['model_q8.onnx', 'model.int8.onnx'];
+      final hintFile = config.modelType == ASRModelType.senseVoice
+          ? senseVoiceFiles[0]
+          : 'conv_frontend.onnx';
+
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
         allowCompression: false,
-        dialogTitle: '选择ASR模型目录中的conv_frontend.onnx',
+        dialogTitle: '选择ASR模型目录中的$hintFile',
       );
 
       if (result != null && result.files.single.path != null) {
         final filePath = result.files.single.path!;
-        if (!filePath.endsWith('conv_frontend.onnx')) {
+        final isValidFile = config.modelType == ASRModelType.senseVoice
+            ? senseVoiceFiles.any((f) => filePath.endsWith(f))
+            : filePath.endsWith(hintFile);
+        if (!isValidFile) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('请选择conv_frontend.onnx文件来定位模型目录')),
+              SnackBar(content: Text('请选择${config.modelType == ASRModelType.senseVoice ? senseVoiceFiles.join(' 或 ') : hintFile}文件来定位模型目录')),
             );
           }
           return;
@@ -675,7 +705,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
         final modelDir = File(filePath).parent.path;
         final newConfig = ASRModelConfig(
           source: _asrConfig.source,
-          size: _asrConfig.size,
+          modelType: _asrConfig.modelType,
           githubProxyUrl: _asrConfig.githubProxyUrl,
           modelDir: modelDir,
           vadModelPath: _asrConfig.vadModelPath,
@@ -753,7 +783,9 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
-                        'Qwen3-ASR 离线语音识别',
+                        _asrConfig.modelType == ASRModelType.senseVoice
+                            ? 'SenseVoice 中英日韩粤语'
+                            : 'Qwen3-ASR 离线语音识别',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -769,7 +801,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
             const SizedBox(height: 12),
             _buildSourceSelector(),
             const SizedBox(height: 12),
-            _buildSizeSelector(),
+            _buildModelTypeSelector(),
             if (_asrConfig.source == ASRModelSource.github) ...[
               const SizedBox(height: 12),
               TextField(
@@ -784,7 +816,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
                 onChanged: (value) {
                   final newConfig = ASRModelConfig(
                     source: _asrConfig.source,
-                    size: _asrConfig.size,
+                    modelType: _asrConfig.modelType,
                     githubProxyUrl: value,
                     modelDir: _asrConfig.modelDir,
                     vadModelPath: _asrConfig.vadModelPath,
@@ -893,7 +925,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
           onSelectionChanged: (Set<ASRModelSource> selection) {
             final newConfig = ASRModelConfig(
               source: selection.first,
-              size: _asrConfig.size,
+              modelType: _asrConfig.modelType,
               githubProxyUrl: _asrConfig.githubProxyUrl,
               modelDir: _asrConfig.modelDir,
               vadModelPath: _asrConfig.vadModelPath,
@@ -905,33 +937,33 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
     );
   }
 
-  Widget _buildSizeSelector() {
+  Widget _buildModelTypeSelector() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '模型大小',
+          '模型类型',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         const SizedBox(height: 8),
-        SegmentedButton<ASRModelSize>(
+        SegmentedButton<ASRModelType>(
           segments: const [
             ButtonSegment(
-              value: ASRModelSize.size06B,
-              label: Text('0.6B'),
-              tooltip: '约940MB，速度快',
+              value: ASRModelType.senseVoice,
+              label: Text('SenseVoice'),
+              tooltip: '约229MB，中英日韩粤语，速度快',
             ),
             ButtonSegment(
-              value: ASRModelSize.size17B,
-              label: Text('1.7B'),
-              tooltip: '约2GB，精度高',
+              value: ASRModelType.qwen3Asr,
+              label: Text('Qwen3-ASR'),
+              tooltip: '约940MB，精度高',
             ),
           ],
-          selected: {_asrConfig.size},
-          onSelectionChanged: (Set<ASRModelSize> selection) {
+          selected: {_asrConfig.modelType},
+          onSelectionChanged: (Set<ASRModelType> selection) {
             final newConfig = ASRModelConfig(
               source: _asrConfig.source,
-              size: selection.first,
+              modelType: selection.first,
               githubProxyUrl: _asrConfig.githubProxyUrl,
               modelDir: _asrConfig.modelDir,
               vadModelPath: _asrConfig.vadModelPath,

@@ -234,6 +234,8 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                       padding: const EdgeInsets.all(8),
                       itemCount: asr.results.length,
                       key: const PageStorageKey('asr_results_list'),
+                      addAutomaticKeepAlives: false,
+                      addRepaintBoundaries: true,
                       itemBuilder: (context, index) {
                         final result = asr.results[asr.results.length - 1 - index];
                         return _buildASRResultCard(result, asr, pdfProvider);
@@ -248,70 +250,72 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
 
   Widget _buildASRResultCard(
       ASRResult result, ASRProvider asr, PdfProvider pdfProvider) {
-    return Card(
-      key: ValueKey(result.timestamp.toIso8601String()),
-      margin: const EdgeInsets.only(bottom: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              result.text,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Text(
-                  '${result.timestamp.hour}:${result.timestamp.minute.toString().padLeft(2, '0')}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 10,
+    return RepaintBoundary(
+      child: Card(
+        key: ValueKey(result.timestamp.toIso8601String()),
+        margin: const EdgeInsets.only(bottom: 6),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                result.text,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text(
+                    '${result.timestamp.hour}:${result.timestamp.minute.toString().padLeft(2, '0')}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 10,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                _buildMiniButton(
-                  icon: Icons.edit,
-                  tooltip: '编辑',
-                  onPressed: () => _editAsrResult(result, asr),
-                ),
-                _buildMiniButton(
-                  icon: Icons.auto_awesome,
-                  tooltip: 'AI优化',
-                  onPressed: () => _optimizeAsrResult(result, pdfProvider),
-                ),
-                _buildMiniButton(
-                  icon: Icons.note_add,
-                  tooltip: '保存为笔记',
-                  onPressed: () => _saveAsrResultAsNote(result, pdfProvider),
-                ),
-                _buildMiniButton(
-                  icon: Icons.question_mark,
-                  tooltip: '检测问题',
-                  onPressed: () async {
-                    final pdfProvider = context.read<PdfProvider>();
-                    String? pdfContext;
-                    if (pdfProvider.isDocumentLoaded) {
-                      pdfContext = await pdfProvider.getSurroundingPagesText(range: 1);
-                    }
-                    if (mounted) {
-                      context.read<QuestionProvider>().detectQuestion(
-                        result.text,
-                        context: pdfContext,
-                      );
-                    }
-                  },
-                ),
-                _buildMiniButton(
-                  icon: Icons.delete_outline,
-                  tooltip: '删除',
-                  onPressed: () => _deleteAsrResult(result, asr),
-                ),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 4),
+                  _buildMiniButton(
+                    icon: Icons.edit,
+                    tooltip: '编辑',
+                    onPressed: () => _editAsrResult(result, asr),
+                  ),
+                  _buildMiniButton(
+                    icon: Icons.auto_awesome,
+                    tooltip: 'AI优化',
+                    onPressed: () => _optimizeAsrResult(result, pdfProvider),
+                  ),
+                  _buildMiniButton(
+                    icon: Icons.note_add,
+                    tooltip: '保存为笔记',
+                    onPressed: () => _saveAsrResultAsNote(result, pdfProvider),
+                  ),
+                  _buildMiniButton(
+                    icon: Icons.question_mark,
+                    tooltip: '检测问题',
+                    onPressed: () async {
+                      final pdfProvider = context.read<PdfProvider>();
+                      String? pdfContext;
+                      if (pdfProvider.isDocumentLoaded) {
+                        pdfContext = await pdfProvider.getSurroundingPagesText(range: 1);
+                      }
+                      if (mounted) {
+                        context.read<QuestionProvider>().detectQuestion(
+                          result.text,
+                          context: pdfContext,
+                        );
+                      }
+                    },
+                  ),
+                  _buildMiniButton(
+                    icon: Icons.delete_outline,
+                    tooltip: '删除',
+                    onPressed: () => _deleteAsrResult(result, asr),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -399,6 +403,8 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                 padding: const EdgeInsets.all(8),
                 itemCount: notes.length,
                 key: const PageStorageKey('notes_list'),
+                addAutomaticKeepAlives: false,
+                addRepaintBoundaries: true,
                 itemBuilder: (context, index) {
                   final note = notes[index];
                   return _buildNoteCard(note, noteProvider, pdfProvider);

@@ -70,7 +70,7 @@ class SherpaASRService {
 
   Future<String> get _modelDirectory async {
     final appDir = await getApplicationSupportDirectory();
-    return '${appDir.path}/qwen3_asr_model';
+    return '${appDir.path}/asr_model';
   }
 
   Future<bool> initialize() async {
@@ -85,38 +85,6 @@ class SherpaASRService {
       final config = _getConfig();
       final modelDir = config.modelDir ?? await _modelDirectory;
 
-      final convFrontendPath = '$modelDir/conv_frontend.onnx';
-      final encoderPath = '$modelDir/encoder.int8.onnx';
-      final decoderPath = '$modelDir/decoder.int8.onnx';
-      final tokenizerPath = '$modelDir/tokenizer';
-
-      final missingFiles = <String>[];
-      if (!await File(convFrontendPath).exists()) {
-        missingFiles.add('conv_frontend.onnx');
-      }
-      if (!await File(encoderPath).exists()) {
-        missingFiles.add('encoder.int8.onnx');
-      }
-      if (!await File(decoderPath).exists()) {
-        missingFiles.add('decoder.int8.onnx');
-      }
-      if (!await File('$tokenizerPath/merges.txt').exists()) {
-        missingFiles.add('tokenizer/merges.txt');
-      }
-      if (!await File('$tokenizerPath/vocab.json').exists()) {
-        missingFiles.add('tokenizer/vocab.json');
-      }
-
-      if (missingFiles.isNotEmpty) {
-        _updateStatus(SherpaASRStatus.error);
-        _errorController.add(
-          'ASR模型文件缺失: ${missingFiles.join(', ')}。请在"模型管理"中下载ASR模型。',
-        );
-        return false;
-      }
-
-      _progressController.add(0.3);
-
       final vadPath = config.vadModelPath ?? '$modelDir/silero_vad.onnx';
 
       if (!await File(vadPath).exists()) {
@@ -127,7 +95,7 @@ class SherpaASRService {
         return false;
       }
 
-      _progressController.add(0.5);
+      _progressController.add(0.3);
 
       final vadConfig = sherpa.VadModelConfig(
         sileroVad: sherpa.SileroVadModelConfig(
@@ -151,19 +119,96 @@ class SherpaASRService {
 
       _buffer = sherpa.CircularBuffer(capacity: 30 * _sampleRate);
 
-      final modelConfig = sherpa.OfflineModelConfig(
-        qwen3Asr: sherpa.OfflineQwen3AsrModelConfig(
-          convFrontend: convFrontendPath,
-          encoder: encoderPath,
-          decoder: decoderPath,
-          tokenizer: tokenizerPath,
-          maxNewTokens: 512,
-        ),
-        tokens: '',
-        numThreads: 4,
-        provider: 'cpu',
-        debug: false,
-      );
+      _progressController.add(0.5);
+
+      sherpa.OfflineModelConfig modelConfig;
+
+      switch (config.modelType) {
+        case ASRModelType.senseVoice:
+          String? modelPath;
+          final modelPathQ8 = '$modelDir/model_q8.onnx';
+          final modelPathInt8 = '$modelDir/model.int8.onnx';
+
+          if (await File(modelPathQ8).exists()) {
+            modelPath = modelPathQ8;
+          } else if (await File(modelPathInt8).exists()) {
+            modelPath = modelPathInt8;
+          }
+
+          if (modelPath == null) {
+            _updateStatus(SherpaASRStatus.error);
+            _errorController.add(
+              'ASR模型文件缺失: model_q8.onnx 或 model.int8.onnx。请在"模型管理"中下载ASR模型。',
+            );
+            return false;
+          }
+
+          final tokensPath = '$modelDir/tokens.txt';
+          if (!await File(tokensPath).exists()) {
+            _updateStatus(SherpaASRStatus.error);
+            _errorController.add(
+              'ASR模型文件缺失: tokens.txt。请在"模型管理"中下载ASR模型。',
+            );
+            return false;
+          }
+
+          modelConfig = sherpa.OfflineModelConfig(
+            senseVoice: sherpa.OfflineSenseVoiceModelConfig(
+              model: modelPath,
+              language: 'auto',
+              useInverseTextNormalization: true,
+            ),
+            tokens: tokensPath,
+            numThreads: 4,
+            provider: 'cpu',
+            debug: false,
+          );
+
+        case ASRModelType.qwen3Asr:
+          final convFrontendPath = '$modelDir/conv_frontend.onnx';
+          final encoderPath = '$modelDir/encoder.int8.onnx';
+          final decoderPath = '$modelDir/decoder.int8.onnx';
+          final tokenizerPath = '$modelDir/tokenizer';
+
+          final missingFiles = <String>[];
+          if (!await File(convFrontendPath).exists()) {
+            missingFiles.add('conv_frontend.onnx');
+          }
+          if (!await File(encoderPath).exists()) {
+            missingFiles.add('encoder.int8.onnx');
+          }
+          if (!await File(decoderPath).exists()) {
+            missingFiles.add('decoder.int8.onnx');
+          }
+          if (!await File('$tokenizerPath/merges.txt').exists()) {
+            missingFiles.add('tokenizer/merges.txt');
+          }
+          if (!await File('$tokenizerPath/vocab.json').exists()) {
+            missingFiles.add('tokenizer/vocab.json');
+          }
+
+          if (missingFiles.isNotEmpty) {
+            _updateStatus(SherpaASRStatus.error);
+            _errorController.add(
+              'ASR模型文件缺失: ${missingFiles.join(', ')}。请在"模型管理"中下载ASR模型。',
+            );
+            return false;
+          }
+
+          modelConfig = sherpa.OfflineModelConfig(
+            qwen3Asr: sherpa.OfflineQwen3AsrModelConfig(
+              convFrontend: convFrontendPath,
+              encoder: encoderPath,
+              decoder: decoderPath,
+              tokenizer: tokenizerPath,
+              maxNewTokens: 512,
+            ),
+            tokens: '',
+            numThreads: 4,
+            provider: 'cpu',
+            debug: false,
+          );
+      }
 
       final recognizerConfig = sherpa.OfflineRecognizerConfig(
         model: modelConfig,
@@ -175,11 +220,11 @@ class SherpaASRService {
       _progressController.add(1.0);
       _isInitialized = true;
       _updateStatus(SherpaASRStatus.initialized);
-      _logger.i('Qwen3-ASR initialized successfully from $modelDir');
+      _logger.i('${config.modelTypeLabel} initialized successfully from $modelDir');
 
       return true;
     } catch (e) {
-      _logger.e('Failed to initialize Qwen3-ASR: $e');
+      _logger.e('Failed to initialize ASR: $e');
       _updateStatus(SherpaASRStatus.error);
       _errorController.add('初始化失败: $e');
       return false;
@@ -279,7 +324,7 @@ class SherpaASRService {
 
         _isListening = true;
         _updateStatus(SherpaASRStatus.listening);
-        _logger.i('Started listening with Qwen3-ASR + VAD');
+        _logger.i('Started listening with ASR + VAD');
       } else {
         _errorController.add('没有麦克风权限');
         _logger.e('Microphone permission not granted');
