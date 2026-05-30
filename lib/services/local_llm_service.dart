@@ -109,9 +109,11 @@ class LocalLLMService {
       }
       
       _loadProgressController.add(0.5);
-      
+
       _engine = LlamaEngine(LlamaBackend());
+      await Future<void>.delayed(Duration.zero);
       await _engine!.loadModel(_modelPath!);
+      await Future<void>.delayed(Duration.zero);
       
       _isLoaded = true;
       _loadProgressController.add(1.0);
@@ -145,7 +147,11 @@ class LocalLLMService {
       await for (final chunk in _engine!.generate(prompt)) {
         tokens.add(chunk);
         _streamController.add(chunk);
-        
+
+        if (tokens.length % 2 == 0) {
+          await Future<void>.delayed(Duration.zero);
+        }
+
         if (tokens.length >= maxTokens) {
           break;
         }
@@ -181,7 +187,11 @@ class LocalLLMService {
       
       await for (final chunk in _engine!.generate(prompt)) {
         tokenCount++;
-        
+
+        if (tokenCount % 2 == 0) {
+          await Future<void>.delayed(Duration.zero);
+        }
+
         if (tokenCount > maxTokens) {
           break;
         }

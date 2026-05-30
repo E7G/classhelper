@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
 
 class SearchResult {
@@ -64,69 +65,11 @@ class BingSearchService {
       );
 
       final html = response.data as String;
-      return _parseBingHtml(html, count);
+      return await compute(_parseBingHtmlIsolate, _BingParseRequest(html, count));
     } catch (e) {
       _logger.e('Bing search request error: $e');
       return null;
     }
-  }
-
-  List<SearchResult>? _parseBingHtml(String html, int count) {
-    final results = <SearchResult>[];
-
-    final liPattern = RegExp(
-      r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<h2[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>([^<]*(?:<[^>]*>[^<]*</[^>]*>)*[^<]*)</a>.*?</h2>.*?(?:<p[^>]*>([^<]*(?:<[^>]*>[^<]*</[^>]*>)*[^<]*)</p>)?',
-      dotAll: true,
-    );
-
-    final matches = liPattern.allMatches(html);
-    for (final match in matches.take(count)) {
-      final url = match.group(1) ?? '';
-      var title = _stripHtmlTags(match.group(2) ?? '');
-      var snippet = _stripHtmlTags(match.group(3) ?? '');
-
-      if (title.isNotEmpty && url.isNotEmpty) {
-        results.add(SearchResult(
-          title: title.trim(),
-          snippet: snippet.trim(),
-          url: url,
-        ));
-      }
-    }
-
-    if (results.isEmpty) {
-      final simplePattern = RegExp(
-        r'<a[^>]*href="(https?://[^"]*)"[^>]*class="[^"]*b_title[^"]*"[^>]*>([^<]*)</a>',
-        dotAll: true,
-      );
-      final simpleMatches = simplePattern.allMatches(html);
-      for (final match in simpleMatches.take(count)) {
-        final url = match.group(1) ?? '';
-        final title = _stripHtmlTags(match.group(2) ?? '');
-        if (title.isNotEmpty && url.isNotEmpty) {
-          results.add(SearchResult(
-            title: title.trim(),
-            snippet: '',
-            url: url,
-          ));
-        }
-      }
-    }
-
-    return results.isNotEmpty ? results : null;
-  }
-
-  String _stripHtmlTags(String html) {
-    return html
-        .replaceAll(RegExp(r'<[^>]*>'), '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .replaceAll('&nbsp;', ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .trim();
   }
 
   Future<Map<String, String>?> searchWithUrls(String query, {int count = 5}) async {
@@ -147,4 +90,71 @@ class BingSearchService {
     }
     return searchResults;
   }
+}
+
+class _BingParseRequest {
+  final String html;
+  final int count;
+
+  const _BingParseRequest(this.html, this.count);
+}
+
+List<SearchResult>? _parseBingHtmlIsolate(_BingParseRequest request) {
+  final html = request.html;
+  final count = request.count;
+  final results = <SearchResult>[];
+
+  final liPattern = RegExp(
+    r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<h2[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>([^<]*(?:<[^>]*>[^<]*</[^>]*>)*[^<]*)</a>.*?</h2>.*?(?:<p[^>]*>([^<]*(?:<[^>]*>[^<]*</[^>]*>)*[^<]*)</p>)?',
+    dotAll: true,
+  );
+
+  final matches = liPattern.allMatches(html);
+  for (final match in matches.take(count)) {
+    final url = match.group(1) ?? '';
+    var title = _stripHtmlTagsIsolate(match.group(2) ?? '');
+    var snippet = _stripHtmlTagsIsolate(match.group(3) ?? '');
+
+    if (title.isNotEmpty && url.isNotEmpty) {
+      results.add(SearchResult(
+        title: title.trim(),
+        snippet: snippet.trim(),
+        url: url,
+      ));
+    }
+  }
+
+  if (results.isEmpty) {
+    final simplePattern = RegExp(
+      r'<a[^>]*href="(https?://[^"]*)"[^>]*class="[^"]*b_title[^"]*"[^>]*>([^<]*)</a>',
+      dotAll: true,
+    );
+    final simpleMatches = simplePattern.allMatches(html);
+    for (final match in simpleMatches.take(count)) {
+      final url = match.group(1) ?? '';
+      final title = _stripHtmlTagsIsolate(match.group(2) ?? '');
+      if (title.isNotEmpty && url.isNotEmpty) {
+        results.add(SearchResult(
+          title: title.trim(),
+          snippet: '',
+          url: url,
+        ));
+      }
+    }
+  }
+
+  return results.isNotEmpty ? results : null;
+}
+
+String _stripHtmlTagsIsolate(String html) {
+  return html
+      .replaceAll(RegExp(r'<[^>]*>'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll('&nbsp;', ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .trim();
 }

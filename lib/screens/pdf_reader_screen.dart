@@ -123,24 +123,24 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           );
         },
       ),
-      leading: Consumer<PdfProvider>(
-        builder: (context, pdfProvider, _) {
-          if (!pdfProvider.isDocumentLoaded) return const SizedBox.shrink();
-          return IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _openPdf,
-            tooltip: '打开PDF',
-          );
-        },
+      leading: IconButton(
+        icon: const Icon(Icons.folder_open),
+        onPressed: _openPdf,
+        tooltip: '打开PDF',
       ),
       actions: [
         Consumer<PdfProvider>(
           builder: (context, pdfProvider, _) {
             if (!pdfProvider.isDocumentLoaded) {
               return IconButton(
-                icon: const Icon(Icons.folder_open),
-                onPressed: _openPdf,
-                tooltip: '打开PDF',
+                icon: const Icon(Icons.settings_outlined),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                },
+                tooltip: '设置',
               );
             }
             return Row(
@@ -189,6 +189,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                       MaterialPageRoute(builder: (_) => const SettingsScreen()),
                     );
                   },
+                  tooltip: '设置',
                 ),
               ],
             );

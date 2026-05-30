@@ -15,18 +15,18 @@ class QuestionProvider extends ChangeNotifier {
   Question? _currentQuestion;
   String _currentAnswer = '';
   bool _isGenerating = false;
+  bool _isProcessingAnswerQueue = false;
+  final List<Question> _answerQueue = [];
   String? _errorMessage;
   LLMConfig _llmConfig = const LLMConfig();
   String _currentCategory = 'default';
 
   bool _autoDetectEnabled = false;
-  double _autoDetectConfidenceThreshold = 0.6;
+  double _autoDetectConfidenceThreshold = 0.75;
   DateTime? _lastAutoDetectTime;
-  static const Duration _autoDetectCooldown = Duration(seconds: 8);
-  final List<Question> _autoDetectQueue = [];
-  bool _isProcessingAutoDetectQueue = false;
+  static const Duration _autoDetectCooldown = Duration(seconds: 15);
   String? _lastDetectedContent;
-  static const int _minDetectTextLength = 6;
+  static const int _minDetectTextLength = 10;
 
   List<Question> get questions => List.unmodifiable(_questions);
   Question? get currentQuestion => _currentQuestion;
@@ -164,7 +164,9 @@ class QuestionProvider extends ChangeNotifier {
 
   void _loadAutoDetectConfig() {
     _autoDetectEnabled = _settingsBox.get('auto_detect_enabled') as bool? ?? false;
-    _autoDetectConfidenceThreshold = _settingsBox.get('auto_detect_confidence_threshold') as double? ?? 0.6;
+    _autoDetectConfidenceThreshold =
+        (_settingsBox.get('auto_detect_confidence_threshold') as double? ?? 0.75)
+            .clamp(0.65, 1.0);
   }
 
   void _saveAutoDetectConfig() {
@@ -181,7 +183,7 @@ class QuestionProvider extends ChangeNotifier {
   }
 
   void setAutoDetectConfidenceThreshold(double threshold) {
-    threshold = threshold.clamp(0.3, 1.0);
+    threshold = threshold.clamp(0.65, 1.0);
     if (_autoDetectConfidenceThreshold != threshold) {
       _autoDetectConfidenceThreshold = threshold;
       _saveAutoDetectConfig();
@@ -190,19 +192,25 @@ class QuestionProvider extends ChangeNotifier {
   }
 
   void detectQuestion(String text, {String? context}) {
-    final question = _detector.detect(text);
+    final question = _detector.detect(text, strict: false);
 
-    if (question != null) {
-      _addQuestion(question.copyWith(context: context));
+    if (question != null && !_isDuplicateQuestion(text)) {
+      _enqueueQuestion(question.copyWith(context: context));
     }
   }
 
-  Question? processASRResult(
-    String text, {
-    String? asrContext,
-    String? pdfContent,
-    String? pdfFileName,
-  }) {
+  Future<bool> detectQuestionAsync(String text, {String? context}) async {
+    final question = _detector.detect(text, strict: false);
+
+    if (question != null && !_isDuplicateQuestion(text)) {
+      await _enqueueQuestion(question.copyWith(context: context));
+      return true;
+    }
+    return false;
+  }
+
+  /// 快速检测（不加载 PDF），用于自动检测的第一阶段
+  Question? tryDetectFromASR(String text) {
     if (!_autoDetectEnabled) return null;
     if (text.trim().isEmpty) return null;
     if (text.trim().length < _minDetectTextLength) return null;
@@ -218,15 +226,28 @@ class QuestionProvider extends ChangeNotifier {
       return null;
     }
 
+    if (_isDuplicateQuestion(text)) return null;
+
+    if (!_detector.isLikelyQuestion(text, strict: true)) return null;
+
     final question = _detector.detect(
       text,
       confidenceThreshold: _autoDetectConfidenceThreshold,
+      strict: true,
     );
 
-    if (question == null) return null;
+    return question;
+  }
 
-    _lastAutoDetectTime = now;
-    _lastDetectedContent = text;
+  /// 确认自动检测并加入回答队列（可附带 PDF 上下文）
+  Future<Question?> confirmAutoDetectedQuestion(
+    Question question, {
+    String? asrContext,
+    String? pdfContent,
+    String? pdfFileName,
+  }) async {
+    _lastAutoDetectTime = DateTime.now();
+    _lastDetectedContent = question.content;
 
     final richContext = _buildRichContext(
       asrContext: asrContext,
@@ -239,24 +260,39 @@ class QuestionProvider extends ChangeNotifier {
       category: pdfFileName ?? _currentCategory,
     );
 
-    _addQuestionToAutoDetectQueue(enrichedQuestion);
+    await _addQuestionToAutoDetectQueue(enrichedQuestion);
     return enrichedQuestion;
   }
 
-  bool _isSimilarText(String a, String b) {
-    final aTrimmed = a.trim();
-    final bTrimmed = b.trim();
-    if (aTrimmed == bTrimmed) return true;
-    if (aTrimmed.contains(bTrimmed) || bTrimmed.contains(aTrimmed)) return true;
-    final shorter = aTrimmed.length < bTrimmed.length ? aTrimmed : bTrimmed;
-    final longer = aTrimmed.length < bTrimmed.length ? bTrimmed : aTrimmed;
-    if (shorter.length >= 4) {
-      int commonChars = 0;
-      for (int i = 0; i < shorter.length; i++) {
-        if (longer.contains(shorter[i])) commonChars++;
-      }
-      if (commonChars / shorter.length > 0.8) return true;
+  bool _isDuplicateQuestion(String text) {
+    final normalized = _normalizeText(text);
+    if (normalized.length < 4) return false;
+
+    for (final question in _questions.take(15)) {
+      if (_normalizeText(question.content) == normalized) return true;
+      if (_isSimilarText(text, question.content)) return true;
     }
+    return false;
+  }
+
+  String _normalizeText(String text) {
+    return text
+        .trim()
+        .replaceAll(RegExp(r'[？?。，,\.!！\s]'), '')
+        .toLowerCase();
+  }
+
+  bool _isSimilarText(String a, String b) {
+    final aNorm = _normalizeText(a);
+    final bNorm = _normalizeText(b);
+    if (aNorm.isEmpty || bNorm.isEmpty) return false;
+    if (aNorm == bNorm) return true;
+    if (aNorm.contains(bNorm) || bNorm.contains(aNorm)) return true;
+
+    final shorter = aNorm.length < bNorm.length ? aNorm : bNorm;
+    final longer = aNorm.length < bNorm.length ? bNorm : aNorm;
+    if (shorter.length >= 6 && longer.startsWith(shorter)) return true;
+
     return false;
   }
 
@@ -282,28 +318,8 @@ class QuestionProvider extends ChangeNotifier {
     return parts.join('\n\n');
   }
 
-  void _addQuestionToAutoDetectQueue(Question question) async {
-    await _questionBox.put(question.id, question);
-    _questions.insert(0, question);
-    _currentQuestion = question;
-    notifyListeners();
-
-    _autoDetectQueue.add(question);
-    _processAutoDetectQueue();
-  }
-
-  void _processAutoDetectQueue() async {
-    if (_isProcessingAutoDetectQueue) return;
-    if (_autoDetectQueue.isEmpty) return;
-
-    _isProcessingAutoDetectQueue = true;
-
-    while (_autoDetectQueue.isNotEmpty) {
-      final question = _autoDetectQueue.removeAt(0);
-      await _generateAnswer(question);
-    }
-
-    _isProcessingAutoDetectQueue = false;
+  Future<void> _addQuestionToAutoDetectQueue(Question question) async {
+    await _enqueueQuestion(question);
   }
 
   Future<Question> createQuestion(String content, {String? context, QuestionType type = QuestionType.unknown, String? category}) async {
@@ -322,7 +338,7 @@ class QuestionProvider extends ChangeNotifier {
     _currentQuestion = question;
     notifyListeners();
 
-    _generateAnswer(question);
+    _scheduleAnswerGeneration(question);
     return question;
   }
 
@@ -347,18 +363,34 @@ class QuestionProvider extends ChangeNotifier {
     return question;
   }
 
-  void _addQuestion(Question question) async {
+  Future<void> _enqueueQuestion(Question question) async {
     await _questionBox.put(question.id, question);
     _questions.insert(0, question);
     _currentQuestion = question;
     notifyListeners();
 
-    _generateAnswer(question);
+    _scheduleAnswerGeneration(question);
+  }
+
+  void _scheduleAnswerGeneration(Question question) {
+    _answerQueue.add(question);
+    _processAnswerQueue();
+  }
+
+  Future<void> _processAnswerQueue() async {
+    if (_isProcessingAnswerQueue) return;
+
+    _isProcessingAnswerQueue = true;
+
+    while (_answerQueue.isNotEmpty) {
+      final question = _answerQueue.removeAt(0);
+      await _generateAnswer(question);
+    }
+
+    _isProcessingAnswerQueue = false;
   }
 
   Future<void> _generateAnswer(Question question) async {
-    if (_isGenerating) return;
-
     _isGenerating = true;
     _errorMessage = null;
     notifyListeners();

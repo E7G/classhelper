@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -21,6 +22,7 @@ class ASRProvider extends ChangeNotifier {
   bool _isRecording = false;
   double _loadProgress = 0.0;
   bool _backgroundMode = false;
+  Timer? _notifyDebounce;
 
   void Function(ASRResult result)? onNewResult;
 
@@ -58,10 +60,11 @@ class ASRProvider extends ChangeNotifier {
           }
         }
         _currentText = '';
+        notifyListeners();
       } else {
         _currentText = result.text;
+        _scheduleNotify();
       }
-      notifyListeners();
     });
 
     _unifiedASR.errorStream.listen((error) {
@@ -71,6 +74,13 @@ class ASRProvider extends ChangeNotifier {
 
     _unifiedASR.progressStream.listen((progress) {
       _loadProgress = progress;
+      _scheduleNotify();
+    });
+  }
+
+  void _scheduleNotify() {
+    _notifyDebounce?.cancel();
+    _notifyDebounce = Timer(const Duration(milliseconds: 100), () {
       notifyListeners();
     });
   }
@@ -359,6 +369,7 @@ class ASRProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _notifyDebounce?.cancel();
     _unifiedASR.dispose();
     super.dispose();
   }

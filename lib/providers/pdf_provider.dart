@@ -20,6 +20,7 @@ class PdfProvider extends ChangeNotifier {
   List<PdfBookmark> _bookmarks = [];
   double _zoomLevel = 1.0;
   late Box _pdfBox;
+  final Map<int, String> _pageTextCache = {};
   final PdfViewerController controller = PdfViewerController();
   String _currentCategory = 'default';
 
@@ -146,6 +147,7 @@ class PdfProvider extends ChangeNotifier {
       _totalPages = _document!.pages.length;
       _currentPage = 1;
       _zoomLevel = 1.0;
+      _pageTextCache.clear();
 
       _currentCategory = _fileName!;
       if (!_categories.contains(_currentCategory)) {
@@ -274,6 +276,7 @@ class PdfProvider extends ChangeNotifier {
     _currentPage = 1;
     _totalPages = 0;
     _zoomLevel = 1.0;
+    _pageTextCache.clear();
     notifyListeners();
   }
 
@@ -292,11 +295,16 @@ class PdfProvider extends ChangeNotifier {
 
   Future<String> getPageText(int pageNumber) async {
     if (_document == null || pageNumber < 1 || pageNumber > _totalPages) return '';
-    
+
+    final cached = _pageTextCache[pageNumber];
+    if (cached != null) return cached;
+
     try {
       final page = _document!.pages[pageNumber - 1];
       final pageText = await page.loadText();
-      return pageText.fullText;
+      final text = pageText.fullText;
+      _pageTextCache[pageNumber] = text;
+      return text;
     } catch (e) {
       _logger.e('Failed to extract text from page $pageNumber: $e');
       return '';
@@ -305,18 +313,19 @@ class PdfProvider extends ChangeNotifier {
 
   Future<String> getSurroundingPagesText({int range = 1}) async {
     if (_document == null) return '';
-    
+
     final texts = <String>[];
     final startPage = (_currentPage - range).clamp(1, _totalPages);
     final endPage = (_currentPage + range).clamp(1, _totalPages);
-    
+
     for (int i = startPage; i <= endPage; i++) {
       final text = await getPageText(i);
       if (text.isNotEmpty) {
         texts.add('--- 第 $i 页 ---\n$text');
       }
+      await Future<void>.delayed(Duration.zero);
     }
-    
+
     return texts.join('\n\n');
   }
 
@@ -332,6 +341,7 @@ class PdfProvider extends ChangeNotifier {
       if (text.isNotEmpty) {
         texts.add('--- 第 $i 页 ---\n$text');
       }
+      await Future<void>.delayed(Duration.zero);
     }
 
     return texts.join('\n\n');

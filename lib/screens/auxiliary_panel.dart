@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +19,7 @@ import '../models/question.dart';
 import '../widgets/asr_status_indicator.dart';
 import '../widgets/note_preview_dialog.dart';
 import '../widgets/question_preview_dialog.dart';
+import '../config/app_config.dart';
 
 class AuxiliaryPanel extends StatefulWidget {
   const AuxiliaryPanel({super.key});
@@ -30,6 +32,8 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   bool _isOrganizing = false;
+  Timer? _asrDetectDebounce;
+  bool _isDetectingQuestion = false;
 
   @override
   void initState() {
@@ -50,16 +54,25 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
     final questionProvider = context.read<QuestionProvider>();
     if (!questionProvider.autoDetectEnabled) return;
 
-    final pdfProvider = context.read<PdfProvider>();
+    _asrDetectDebounce?.cancel();
+    _asrDetectDebounce = Timer(AppConfig.questionDetectionDebounce, () {
+      if (!mounted) return;
 
-    final asrProvider = context.read<ASRProvider>();
-    final recentTexts = asrProvider.results
-        .skip(asrProvider.results.length > 5 ? asrProvider.results.length - 5 : 0)
-        .map((r) => r.text)
-        .toList();
-    final asrContext = recentTexts.join('\n');
+      final pdfProvider = context.read<PdfProvider>();
+      final asrProvider = context.read<ASRProvider>();
+      final recentTexts = asrProvider.results
+          .skip(asrProvider.results.length > 5 ? asrProvider.results.length - 5 : 0)
+          .map((r) => r.text)
+          .toList();
+      final asrContext = recentTexts.join('\n');
 
-    _processASRWithPdfContext(result.text, asrContext, pdfProvider, questionProvider);
+      _processASRWithPdfContext(
+        result.text,
+        asrContext,
+        pdfProvider,
+        questionProvider,
+      );
+    });
   }
 
   Future<void> _processASRWithPdfContext(
@@ -68,6 +81,9 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
     PdfProvider pdfProvider,
     QuestionProvider questionProvider,
   ) async {
+    final candidate = questionProvider.tryDetectFromASR(text);
+    if (candidate == null) return;
+
     String? pdfContent;
     String? pdfFileName;
 
@@ -76,8 +92,10 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
       pdfFileName = pdfProvider.fileName;
     }
 
-    final detected = questionProvider.processASRResult(
-      text,
+    if (!mounted) return;
+
+    final detected = await questionProvider.confirmAutoDetectedQuestion(
+      candidate,
       asrContext: asrContext,
       pdfContent: pdfContent,
       pdfFileName: pdfFileName,
@@ -90,6 +108,7 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
 
   @override
   void dispose() {
+    _asrDetectDebounce?.cancel();
     try {
       final asr = context.read<ASRProvider>();
       asr.onNewResult = null;
@@ -293,19 +312,9 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
                   _buildMiniButton(
                     icon: Icons.question_mark,
                     tooltip: '检测问题',
-                    onPressed: () async {
-                      final pdfProvider = context.read<PdfProvider>();
-                      String? pdfContext;
-                      if (pdfProvider.isDocumentLoaded) {
-                        pdfContext = await pdfProvider.getSurroundingPagesText(range: 1);
-                      }
-                      if (mounted) {
-                        context.read<QuestionProvider>().detectQuestion(
-                          result.text,
-                          context: pdfContext,
-                        );
-                      }
-                    },
+                    onPressed: _isDetectingQuestion
+                        ? null
+                        : () => _detectQuestionFromAsr(result),
                   ),
                   _buildMiniButton(
                     icon: Icons.delete_outline,
@@ -321,10 +330,56 @@ class _AuxiliaryPanelState extends State<AuxiliaryPanel>
     );
   }
 
+  Future<void> _detectQuestionFromAsr(ASRResult result) async {
+    if (_isDetectingQuestion) return;
+
+    setState(() => _isDetectingQuestion = true);
+
+    try {
+      final pdfProvider = context.read<PdfProvider>();
+      final questionProvider = context.read<QuestionProvider>();
+
+      String? pdfContext;
+      if (pdfProvider.isDocumentLoaded) {
+        pdfContext = await pdfProvider.getSurroundingPagesText(range: 1);
+      }
+
+      if (!mounted) return;
+
+      final detected = await questionProvider.detectQuestionAsync(
+        result.text,
+        context: pdfContext,
+      );
+
+      if (mounted) {
+        if (detected) {
+          _tabController.animateTo(2);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('问题检测完成，正在生成回答...'),
+              duration: Duration(seconds: 1),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('未检测到问题，请尝试手动添加'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDetectingQuestion = false);
+      }
+    }
+  }
+
   Widget _buildMiniButton({
     required IconData icon,
     required String tooltip,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
   }) {
     return IconButton(
       icon: Icon(icon, size: 16),

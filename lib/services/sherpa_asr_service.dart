@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'package:path_provider/path_provider.dart';
 import 'package:hive/hive.dart';
 import 'package:logger/logger.dart';
 import 'package:record/record.dart';
 import '../models/asr_result.dart';
 import '../models/asr_model_config.dart';
+import 'asr_isolate_processor.dart';
 
 enum SherpaASRStatus {
   notInitialized,
@@ -21,10 +21,7 @@ enum SherpaASRStatus {
 class SherpaASRService {
   final Logger _logger = Logger();
 
-  sherpa.OfflineRecognizer? _recognizer;
-  sherpa.VoiceActivityDetector? _vad;
-  sherpa.CircularBuffer? _buffer;
-
+  final AsrIsolateProcessor _processor = AsrIsolateProcessor();
   final AudioRecorder _audioRecorder = AudioRecorder();
 
   final StreamController<ASRResult> _resultController =
@@ -40,9 +37,13 @@ class SherpaASRService {
   bool _isInitialized = false;
   bool _isListening = false;
   StreamSubscription<Uint8List>? _audioStreamSubscription;
+  StreamSubscription<AsrIsolateEvent>? _processorSubscription;
 
   static const int _sampleRate = 16000;
-  static const int _vadWindowSize = 512;
+  static const int _maxPendingAudioChunks = 8;
+
+  final List<Uint8List> _pendingAudio = [];
+  bool _isDrainingAudio = false;
 
   Stream<ASRResult> get resultStream => _resultController.stream;
   Stream<SherpaASRStatus> get statusStream => _statusController.stream;
@@ -73,6 +74,33 @@ class SherpaASRService {
     return '${appDir.path}/asr_model';
   }
 
+  void _listenToProcessor() {
+    _processorSubscription?.cancel();
+    _processorSubscription = _processor.events.listen((event) {
+      switch (event) {
+        case AsrProgressEvent():
+          _progressController.add(event.progress);
+        case AsrResultEvent():
+          final asrResult = ASRResult(
+            text: event.text,
+            confidence: 1.0,
+            isFinal: true,
+            timestamp: DateTime.now(),
+          );
+          _resultController.add(asrResult);
+          _logger.i('Recognized: ${event.text}');
+        case AsrErrorEvent():
+          _errorController.add(event.message);
+        case AsrInitResultEvent():
+          if (!event.success && event.error != null) {
+            _errorController.add(event.error!);
+          }
+        case AsrFlushDoneEvent():
+          break;
+      }
+    });
+  }
+
   Future<bool> initialize() async {
     if (_isInitialized) return true;
 
@@ -80,11 +108,8 @@ class SherpaASRService {
       _updateStatus(SherpaASRStatus.loadingModel);
       _progressController.add(0.0);
 
-      sherpa.initBindings();
-
       final config = _getConfig();
       final modelDir = config.modelDir ?? await _modelDirectory;
-
       final vadPath = config.vadModelPath ?? '$modelDir/silero_vad.onnx';
 
       if (!await File(vadPath).exists()) {
@@ -95,133 +120,22 @@ class SherpaASRService {
         return false;
       }
 
-      _progressController.add(0.3);
+      _listenToProcessor();
 
-      final vadConfig = sherpa.VadModelConfig(
-        sileroVad: sherpa.SileroVadModelConfig(
-          model: vadPath,
-          threshold: 0.5,
-          minSilenceDuration: 0.5,
-          minSpeechDuration: 0.3,
-          maxSpeechDuration: 20,
-          windowSize: _vadWindowSize,
-        ),
-        sampleRate: _sampleRate,
-        numThreads: 2,
-        provider: 'cpu',
-        debug: false,
+      final success = await _processor.start(
+        modelDir: modelDir,
+        vadPath: vadPath,
+        modelType: config.modelType,
       );
 
-      _vad = sherpa.VoiceActivityDetector(
-        config: vadConfig,
-        bufferSizeInSeconds: 30,
-      );
-
-      _buffer = sherpa.CircularBuffer(capacity: 30 * _sampleRate);
-
-      _progressController.add(0.5);
-
-      sherpa.OfflineModelConfig modelConfig;
-
-      switch (config.modelType) {
-        case ASRModelType.senseVoice:
-          String? modelPath;
-          final modelPathQ8 = '$modelDir/model_q8.onnx';
-          final modelPathInt8 = '$modelDir/model.int8.onnx';
-
-          if (await File(modelPathQ8).exists()) {
-            modelPath = modelPathQ8;
-          } else if (await File(modelPathInt8).exists()) {
-            modelPath = modelPathInt8;
-          }
-
-          if (modelPath == null) {
-            _updateStatus(SherpaASRStatus.error);
-            _errorController.add(
-              'ASR模型文件缺失: model_q8.onnx 或 model.int8.onnx。请在"模型管理"中下载ASR模型。',
-            );
-            return false;
-          }
-
-          final tokensPath = '$modelDir/tokens.txt';
-          if (!await File(tokensPath).exists()) {
-            _updateStatus(SherpaASRStatus.error);
-            _errorController.add(
-              'ASR模型文件缺失: tokens.txt。请在"模型管理"中下载ASR模型。',
-            );
-            return false;
-          }
-
-          modelConfig = sherpa.OfflineModelConfig(
-            senseVoice: sherpa.OfflineSenseVoiceModelConfig(
-              model: modelPath,
-              language: 'auto',
-              useInverseTextNormalization: true,
-            ),
-            tokens: tokensPath,
-            numThreads: 4,
-            provider: 'cpu',
-            debug: false,
-          );
-
-        case ASRModelType.qwen3Asr:
-          final convFrontendPath = '$modelDir/conv_frontend.onnx';
-          final encoderPath = '$modelDir/encoder.int8.onnx';
-          final decoderPath = '$modelDir/decoder.int8.onnx';
-          final tokenizerPath = '$modelDir/tokenizer';
-
-          final missingFiles = <String>[];
-          if (!await File(convFrontendPath).exists()) {
-            missingFiles.add('conv_frontend.onnx');
-          }
-          if (!await File(encoderPath).exists()) {
-            missingFiles.add('encoder.int8.onnx');
-          }
-          if (!await File(decoderPath).exists()) {
-            missingFiles.add('decoder.int8.onnx');
-          }
-          if (!await File('$tokenizerPath/merges.txt').exists()) {
-            missingFiles.add('tokenizer/merges.txt');
-          }
-          if (!await File('$tokenizerPath/vocab.json').exists()) {
-            missingFiles.add('tokenizer/vocab.json');
-          }
-
-          if (missingFiles.isNotEmpty) {
-            _updateStatus(SherpaASRStatus.error);
-            _errorController.add(
-              'ASR模型文件缺失: ${missingFiles.join(', ')}。请在"模型管理"中下载ASR模型。',
-            );
-            return false;
-          }
-
-          modelConfig = sherpa.OfflineModelConfig(
-            qwen3Asr: sherpa.OfflineQwen3AsrModelConfig(
-              convFrontend: convFrontendPath,
-              encoder: encoderPath,
-              decoder: decoderPath,
-              tokenizer: tokenizerPath,
-              maxNewTokens: 512,
-            ),
-            tokens: '',
-            numThreads: 4,
-            provider: 'cpu',
-            debug: false,
-          );
+      if (!success) {
+        _updateStatus(SherpaASRStatus.error);
+        return false;
       }
 
-      final recognizerConfig = sherpa.OfflineRecognizerConfig(
-        model: modelConfig,
-        decodingMethod: 'greedy_search',
-      );
-
-      _recognizer = sherpa.OfflineRecognizer(recognizerConfig);
-
-      _progressController.add(1.0);
       _isInitialized = true;
       _updateStatus(SherpaASRStatus.initialized);
       _logger.i('${config.modelTypeLabel} initialized successfully from $modelDir');
-
       return true;
     } catch (e) {
       _logger.e('Failed to initialize ASR: $e');
@@ -231,70 +145,32 @@ class SherpaASRService {
     }
   }
 
-  Float32List _convertToFloat32(Uint8List audioData) {
-    final samples = Float32List(audioData.length ~/ 2);
-    for (var i = 0; i < samples.length; i++) {
-      final low = audioData[i * 2];
-      final high = audioData[i * 2 + 1];
-      final sample = (low | (high << 8)).toSigned(16);
-      samples[i] = sample / 32768.0;
+  void processAudioData(Uint8List audioData) {
+    if (!_isInitialized || !_isListening) return;
+
+    if (_pendingAudio.length >= _maxPendingAudioChunks) {
+      _pendingAudio.removeAt(0);
     }
-    return samples;
+    _pendingAudio.add(audioData);
+    _drainAudioQueue();
   }
 
-  void processAudioData(Uint8List audioData) {
-    if (!_isInitialized || _vad == null || _buffer == null || _recognizer == null) {
-      return;
-    }
+  void _drainAudioQueue() {
+    if (_isDrainingAudio || _pendingAudio.isEmpty) return;
 
-    try {
-      final samples = _convertToFloat32(audioData);
-
-      _buffer!.push(samples);
-
-      while (_buffer!.size >= _vadWindowSize) {
-        final windowSamples = _buffer!.get(
-          startIndex: _buffer!.head,
-          n: _vadWindowSize,
-        );
-        _buffer!.pop(_vadWindowSize);
-
-        _vad!.acceptWaveform(windowSamples);
-
-        while (!_vad!.isEmpty()) {
-          final segment = _vad!.front();
-          final segmentSamples = segment.samples;
-
-          if (segmentSamples.isNotEmpty) {
-            final stream = _recognizer!.createStream();
-            stream.acceptWaveform(samples: segmentSamples, sampleRate: _sampleRate);
-
-            _recognizer!.decode(stream);
-            final result = _recognizer!.getResult(stream);
-            final text = result.text;
-
-            if (text.isNotEmpty) {
-              final asrResult = ASRResult(
-                text: text,
-                confidence: 1.0,
-                isFinal: true,
-                timestamp: DateTime.now(),
-              );
-
-              _resultController.add(asrResult);
-              _logger.i('Recognized: $text');
-            }
-
-            stream.free();
-          }
-
-          _vad!.pop();
-        }
+    _isDrainingAudio = true;
+    Future<void>(() async {
+      while (_pendingAudio.isNotEmpty && _isListening) {
+        final chunk = _pendingAudio.removeAt(0);
+        _processor.sendAudio(chunk);
+        await Future<void>.delayed(Duration.zero);
       }
-    } catch (e) {
-      _logger.e('Error processing audio: $e');
-      _errorController.add('处理音频失败: $e');
-    }
+      _isDrainingAudio = false;
+
+      if (_pendingAudio.isNotEmpty) {
+        _drainAudioQueue();
+      }
+    });
   }
 
   Future<void> startListening() async {
@@ -306,8 +182,8 @@ class SherpaASRService {
 
     try {
       if (await _audioRecorder.hasPermission()) {
-        _vad?.reset();
-        _buffer?.reset();
+        _processor.reset();
+        _pendingAudio.clear();
 
         final stream = await _audioRecorder.startStream(const RecordConfig(
           encoder: AudioEncoder.pcm16bits,
@@ -338,6 +214,7 @@ class SherpaASRService {
   Future<void> stopListening() async {
     try {
       _isListening = false;
+      _pendingAudio.clear();
 
       await _audioStreamSubscription?.cancel();
       _audioStreamSubscription = null;
@@ -346,38 +223,8 @@ class SherpaASRService {
         await _audioRecorder.stop();
       }
 
-      if (_vad != null && _recognizer != null) {
-        _vad!.flush();
-
-        while (!_vad!.isEmpty()) {
-          final segment = _vad!.front();
-          final segmentSamples = segment.samples;
-
-          if (segmentSamples.isNotEmpty) {
-            final stream = _recognizer!.createStream();
-            stream.acceptWaveform(samples: segmentSamples, sampleRate: _sampleRate);
-
-            _recognizer!.decode(stream);
-            final result = _recognizer!.getResult(stream);
-            final text = result.text;
-
-            if (text.isNotEmpty) {
-              final asrResult = ASRResult(
-                text: text,
-                confidence: 1.0,
-                isFinal: true,
-                timestamp: DateTime.now(),
-              );
-
-              _resultController.add(asrResult);
-              _logger.i('Final recognized: $text');
-            }
-
-            stream.free();
-          }
-
-          _vad!.pop();
-        }
+      if (_isInitialized) {
+        await _processor.flush();
       }
 
       _updateStatus(SherpaASRStatus.notListening);
@@ -397,10 +244,9 @@ class SherpaASRService {
 
   void dispose() {
     _audioStreamSubscription?.cancel();
+    _processorSubscription?.cancel();
     _audioRecorder.dispose();
-    _vad?.free();
-    _buffer?.free();
-    _recognizer?.free();
+    _processor.dispose();
     _resultController.close();
     _statusController.close();
     _errorController.close();
