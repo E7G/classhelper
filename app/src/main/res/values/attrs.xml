@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Compatibility declarations for attributes consumed by our local Material button styles.
+      Keeping them in the app module avoids non-transitive-R/resource-linking regressions
+      across Material Components / AGP combinations.
+    -->
+    <attr name="insetLeft" format="dimension" />
+    <attr name="insetRight" format="dimension" />
+    <attr name="insetTop" format="dimension" />
+    <attr name="insetBottom" format="dimension" />
+</resources>

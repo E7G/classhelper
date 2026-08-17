@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="paper">#141218</color>
+    <color name="surface">#141218</color>
+    <color name="surface_soft">#1D1B20</color>
+    <color name="surface_raised">#211F26</color>
+    <color name="ink">#E6E0E9</color>
+    <color name="ink_soft">#CAC4D0</color>
+    <color name="muted">#938F99</color>
+    <color name="line">#49454F</color>
+    <color name="line_strong">#938F99</color>
+    <color name="panel">#1D1B20</color>
+    <color name="answer_bg">#211F26</color>
+    <color name="accent">#D0BCFF</color>
+    <color name="accent_text">#381E72</color>
+    <color name="accent_soft">#4F378B</color>
+    <color name="success">#9CD67D</color>
+    <color name="success_bg">#205107</color>
+    <color name="warning_bg">#514600</color>
+    <color name="danger">#FFB4AB</color>
+    <color name="danger_bg">#93000A</color>
+</resources>

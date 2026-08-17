@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ClassHelper" parent="Theme.Material3Expressive.DynamicColors.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/md3e_primary</item>
+        <item name="colorOnPrimary">@color/md3e_on_primary</item>
+        <item name="colorPrimaryContainer">@color/md3e_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/md3e_on_primary_container</item>
+        <item name="colorSecondaryContainer">@color/md3e_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/md3e_on_secondary_container</item>
+        <item name="colorTertiaryContainer">@color/md3e_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/md3e_on_tertiary_container</item>
+        <item name="colorSurface">@color/md3e_surface</item>
+        <item name="colorSurfaceContainerLow">@color/md3e_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/md3e_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/md3e_surface_container_high</item>
+        <item name="colorOnSurface">@color/md3e_on_surface</item>
+        <item name="colorOnSurfaceVariant">@color/md3e_on_surface_variant</item>
+        <item name="colorOutline">@color/md3e_outline</item>
+        <item name="colorOutlineVariant">@color/md3e_outline_variant</item>
+        <item name="colorError">@color/md3e_error</item>
+        <item name="colorErrorContainer">@color/md3e_error_container</item>
+        <item name="colorOnErrorContainer">@color/md3e_on_error_container</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="windowActionModeOverlay">true</item>
+        <item name="windowNoTitle">true</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.ClassHelper.MaterialAlertDialog</item>
+    </style>
+
+    <style name="ThemeOverlay.ClassHelper.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.ClassHelper.ExtraLarge</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.ClassHelper" parent="">
+        <item name="cornerFamily">rounded</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.ClassHelper.ExtraLarge" parent="ShapeAppearanceOverlay.ClassHelper">
+        <item name="cornerSize">32dp</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.ClassHelper.Pill" parent="ShapeAppearanceOverlay.ClassHelper">
+        <item name="cornerSize">50%</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Button.Primary" parent="Widget.Material3.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="cornerRadius">24dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Button.Secondary" parent="Widget.Material3.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="cornerRadius">24dp</item>
+        <item name="backgroundTint">?attr/colorSecondaryContainer</item>
+        <item name="android:textColor">?attr/colorOnSecondaryContainer</item>
+        <item name="strokeWidth">0dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Button.Ghost" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="cornerRadius">24dp</item>
+    </style>
+
+    <!-- Compact floating annotation controls. Keep the toolbar content-sized instead of letting
+         MaterialButton's default minimum width make the row look several screens wide. -->
+    <style name="Widget.ClassHelper.Button.ToolCompact" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">none</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="cornerRadius">21dp</item>
+        <item name="insetLeft">0dp</item>
+        <item name="insetRight">0dp</item>
+        <item name="insetTop">0dp</item>
+        <item name="insetBottom">0dp</item>
+        <item name="android:paddingLeft">6dp</item>
+        <item name="android:paddingRight">6dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Button.ToolCompactTonal" parent="Widget.ClassHelper.Button.ToolCompact">
+        <item name="backgroundTint">?attr/colorSecondaryContainer</item>
+        <item name="android:textColor">?attr/colorOnSecondaryContainer</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Button.Icon" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="cornerRadius">24dp</item>
+        <item name="insetLeft">0dp</item>
+        <item name="insetRight">0dp</item>
+        <item name="android:paddingLeft">8dp</item>
+        <item name="android:paddingRight">8dp</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Button.Danger" parent="Widget.Material3.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="cornerRadius">24dp</item>
+        <item name="backgroundTint">?attr/colorErrorContainer</item>
+        <item name="android:textColor">?attr/colorOnErrorContainer</item>
+        <item name="strokeWidth">0dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="Widget.ClassHelper.Input" parent="Widget.AppCompat.EditText">
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:textColorHint">?attr/colorOnSurfaceVariant</item>
+    </style>
+</resources>

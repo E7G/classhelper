@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- MD3E fallback palette. Android 12+ uses DynamicColors at runtime. -->
+    <color name="md3e_primary">#65558F</color>
+    <color name="md3e_on_primary">#FFFFFF</color>
+    <color name="md3e_primary_container">#E9DDFF</color>
+    <color name="md3e_on_primary_container">#211047</color>
+    <color name="md3e_secondary_container">#E8DEF8</color>
+    <color name="md3e_on_secondary_container">#1D192B</color>
+    <color name="md3e_tertiary_container">#FFD8E4</color>
+    <color name="md3e_on_tertiary_container">#31111D</color>
+    <color name="md3e_surface">#FFFBFE</color>
+    <color name="md3e_surface_container_low">#F7F2FA</color>
+    <color name="md3e_surface_container">#F3EDF7</color>
+    <color name="md3e_surface_container_high">#ECE6F0</color>
+    <color name="md3e_on_surface">#1D1B20</color>
+    <color name="md3e_on_surface_variant">#49454F</color>
+    <color name="md3e_outline">#79747E</color>
+    <color name="md3e_outline_variant">#CAC4D0</color>
+    <color name="md3e_error">#BA1A1A</color>
+    <color name="md3e_error_container">#FFDAD6</color>
+    <color name="md3e_on_error_container">#410002</color>
+
+    <!-- Backward-compatible aliases used by drawing/PDF code and older resources. -->
+    <color name="paper">#FFFBFE</color>
+    <color name="surface">#FFFBFE</color>
+    <color name="surface_soft">#F7F2FA</color>
+    <color name="surface_raised">#F3EDF7</color>
+    <color name="ink">#1D1B20</color>
+    <color name="ink_soft">#49454F</color>
+    <color name="muted">#79747E</color>
+    <color name="line">#CAC4D0</color>
+    <color name="line_strong">#79747E</color>
+    <color name="panel">#FFFBFE</color>
+    <color name="answer_bg">#F7F2FA</color>
+    <color name="accent">#65558F</color>
+    <color name="accent_text">#FFFFFF</color>
+    <color name="accent_soft">#E9DDFF</color>
+    <color name="success">#386A20</color>
+    <color name="success_bg">#B7F397</color>
+    <color name="warning_bg">#FFF1C2</color>
+    <color name="danger">#BA1A1A</color>
+    <color name="danger_bg">#FFDAD6</color>
+</resources>

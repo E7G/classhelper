@@ -1,0 +1,13 @@
+ClassHelperNative v1.7.3-sensevoice validation
+
+PASS: tools/validate_source.py
+PASS: activity_reader.xml parses
+PASS: InkOverlayView consumes one-finger annotation gestures without requiring exact page-rect DOWN hit
+PASS: annotation mode enables input immediately using PDFView geometry fallback
+PASS: eraser is adjacent to pen and forced visible in annotation mode
+PASS: no external PDFView.setOnTouchListener remains
+PASS: eraser/clear-page no longer recycle/reload PDFView during editing
+PASS: completion removes ink touch surface immediately
+PASS: post-save raster refresh waits for reader idle and restores latest zoom/pan
+
+Gradle compile attempt: BLOCKED before dependency/build evaluation because Gradle wrapper cannot resolve services.gradle.org to download Gradle 8.11.1 (UnknownHostException).
