@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 179
-        versionName = "1.7.9-sensevoice"
+        versionCode = 180
+        versionName = "1.8.0-subtitles"
         vectorDrawables.useSupportLibrary = true
     }
 

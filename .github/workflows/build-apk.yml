@@ -123,7 +123,11 @@ jobs:
           BUILD_KIND="${{ steps.package.outputs.build_kind }}"
           NOTES="$RUNNER_TEMP/release-notes.md"
 
-          awk 'NR == 1 { next } /^# / { exit } { print }' RELEASE_NOTES.md > "$NOTES"
+          if [[ -f RELEASE_NOTES_CURRENT.md ]]; then
+            cat RELEASE_NOTES_CURRENT.md > "$NOTES"
+          else
+            awk 'NR == 1 { next } /^# / { exit } { print }' RELEASE_NOTES.md > "$NOTES"
+          fi
           if [[ "$BUILD_KIND" == "debug-fallback" ]]; then
             {
               echo
