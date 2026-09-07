@@ -5,33 +5,142 @@ on:
   push:
     branches: [ main, master ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Prepare Gradle wrapper
         run: chmod +x gradlew
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: android-actions/setup-android@v3
+
       - name: Install SDK
-        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -n1)"
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Source validation
-        run: python3 tools/validate_source.py || echo "Source validation skipped"
+        run: python3 tools/validate_source.py
+
       - name: Fetch sherpa-onnx runtime
         run: ./gradlew :app:fetchSherpaAar --stacktrace
+
       - name: Lint and build debug APK
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: ClassHelperNative-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Package installable APK
+        id: package
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          RELEASE_DIR="app/build/outputs/apk/release"
+          OUTPUT="$RELEASE_DIR/ClassHelper-${VERSION}.apk"
+          UNSIGNED="$(find "$RELEASE_DIR" -maxdepth 1 -name '*-unsigned.apk' -print -quit)"
+          ALREADY_SIGNED="$(find "$RELEASE_DIR" -maxdepth 1 -name 'app-release.apk' -print -quit)"
+          BUILD_KIND="release"
+
+          if [[ -n "$UNSIGNED" ]]; then
+            if [[ -n "${KEYSTORE_BASE64:-}" && -n "${KEYSTORE_PASSWORD:-}" && -n "${KEY_ALIAS:-}" && -n "${KEY_PASSWORD:-}" ]]; then
+              printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-keystore.jks"
+              "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+              "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+                --ks "$RUNNER_TEMP/release-keystore.jks" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --ks-pass env:KEYSTORE_PASSWORD \
+                --key-pass env:KEY_PASSWORD \
+                --out "$OUTPUT" \
+                "$RUNNER_TEMP/aligned.apk"
+            else
+              echo "::warning::Release signing secrets are missing; publishing the tested debug-signed APK as a prerelease fallback."
+              OUTPUT="$RELEASE_DIR/ClassHelper-${VERSION}-debug-signed.apk"
+              cp app/build/outputs/apk/debug/app-debug.apk "$OUTPUT"
+              BUILD_KIND="debug-fallback"
+            fi
+          elif [[ -n "$ALREADY_SIGNED" ]]; then
+            cp "$ALREADY_SIGNED" "$OUTPUT"
+          else
+            echo "::error::No release APK produced"
+            exit 1
+          fi
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$OUTPUT"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$OUTPUT" | head -n 3
+          sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+          echo "apk=$OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "checksum=$OUTPUT.sha256" >> "$GITHUB_OUTPUT"
+          echo "build_kind=$BUILD_KIND" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ClassHelperNative-release
-          path: app/build/outputs/apk/release/*.apk
+          path: |
+            ${{ steps.package.outputs.apk }}
+            ${{ steps.package.outputs.checksum }}
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          APK="${{ steps.package.outputs.apk }}"
+          CHECKSUM="${{ steps.package.outputs.checksum }}"
+          BUILD_KIND="${{ steps.package.outputs.build_kind }}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+
+          awk 'NR == 1 { next } /^# / { exit } { print }' RELEASE_NOTES.md > "$NOTES"
+          if [[ "$BUILD_KIND" == "debug-fallback" ]]; then
+            {
+              echo
+              echo '> CI 未检测到正式签名 Secrets，本次资产为经过测试的 debug-signed APK；配置签名 Secrets 后应重新发布正式签名包。'
+            } >> "$NOTES"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" "$CHECKSUM" --clobber
+          else
+            EXTRA=()
+            if [[ "$BUILD_KIND" == "debug-fallback" ]]; then
+              EXTRA+=(--prerelease)
+            fi
+            gh release create "$TAG" "$APK" "$CHECKSUM" \
+              --target "$GITHUB_SHA" \
+              --title "ClassHelper $VERSION" \
+              --notes-file "$NOTES" \
+              "${EXTRA[@]}"
+          fi
