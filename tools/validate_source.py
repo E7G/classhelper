@@ -19,7 +19,9 @@ for p in ROOT.glob('app/src/main/res/**/*.xml'):
     ids.update(re.findall(r'@\+id/([A-Za-z0-9_]+)', p.read_text(errors='ignore')))
 refs = set()
 for p in ROOT.glob('app/src/main/java/**/*.kt'):
-    refs.update(re.findall(r'R\.id\.([A-Za-z0-9_]+)', p.read_text(errors='ignore')))
+    # Only validate the app's unqualified R class. Qualified framework/library resources such as
+    # android.R.id.content are provided by their own packages and must not be treated as app IDs.
+    refs.update(re.findall(r'(?<![A-Za-z0-9_.])R\.id\.([A-Za-z0-9_]+)', p.read_text(errors='ignore')))
 for missing in sorted(refs - ids):
     errors.append(f'Missing R.id definition: {missing}')
 
@@ -28,8 +30,8 @@ layout_refs = set()
 drawable_refs = set()
 for p in ROOT.glob('app/src/main/java/**/*.kt'):
     text = p.read_text(errors='ignore')
-    layout_refs.update(re.findall(r'R\.layout\.([A-Za-z0-9_]+)', text))
-    drawable_refs.update(re.findall(r'R\.drawable\.([A-Za-z0-9_]+)', text))
+    layout_refs.update(re.findall(r'(?<![A-Za-z0-9_.])R\.layout\.([A-Za-z0-9_]+)', text))
+    drawable_refs.update(re.findall(r'(?<![A-Za-z0-9_.])R\.drawable\.([A-Za-z0-9_]+)', text))
 for missing in sorted(layout_refs - layouts):
     errors.append(f'Missing R.layout: {missing}')
 drawables = {p.stem for p in ROOT.glob('app/src/main/res/drawable/*')}

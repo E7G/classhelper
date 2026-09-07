@@ -1,5 +1,6 @@
 package io.github.paper.classhelper.ui
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.DialogInterface
 import android.graphics.Typeface
@@ -10,8 +11,13 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
+import io.github.paper.classhelper.ClassHelperApp
+import io.github.paper.classhelper.R
 
 /**
  * Material 3 Expressive dialog shell used across ClassHelper.
@@ -53,6 +59,7 @@ object Md3eDialogUi {
                 )
                 isClickable = true
                 isFocusable = true
+                isLongClickable = title == "书签" && context is ReaderActivity
             }
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -67,9 +74,13 @@ object Md3eDialogUi {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
             })
-            if (item.supporting.isNotBlank()) {
+            if (item.supporting.isNotBlank() || (title == "书签" && context is ReaderActivity)) {
                 row.addView(TextView(context).apply {
-                    text = item.supporting
+                    text = when {
+                        title == "书签" && context is ReaderActivity && item.supporting.isNotBlank() -> "${item.supporting} · 长按编辑或删除"
+                        title == "书签" && context is ReaderActivity -> "长按编辑或删除"
+                        else -> item.supporting
+                    }
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
                     setTextColor(colorAttr(context, if (item.danger) com.google.android.material.R.attr.colorOnErrorContainer else com.google.android.material.R.attr.colorOnSurfaceVariant, 0xff49454f.toInt()))
                     setLineSpacing(0f, 1.08f)
@@ -100,8 +111,90 @@ object Md3eDialogUi {
                 dialog.dismiss()
                 onSelected(index)
             }
+            if (title == "书签" && context is ReaderActivity) {
+                card.setOnLongClickListener {
+                    dialog.dismiss()
+                    showBookmarkActions(context, index)
+                    true
+                }
+            }
         }
         dialog.show()
+    }
+
+    private fun showBookmarkActions(context: ReaderActivity, index: Int) {
+        val app = context.application as? ClassHelperApp ?: return
+        val documentId = app.graph.settings.currentDocumentId ?: return
+        val bookmark = app.graph.db.bookmarks(documentId).getOrNull(index) ?: return
+        val displayLabel = bookmark.label.ifBlank { "P${bookmark.page + 1}" }
+        showList(
+            context = context,
+            title = "第 ${bookmark.page + 1} 页书签",
+            items = listOf(
+                Item("编辑名称", displayLabel),
+                Item("删除书签", "从当前 PDF 的书签列表中移除", danger = true),
+            ),
+        ) { action ->
+            when (action) {
+                0 -> showBookmarkRename(context, documentId, bookmark.page, displayLabel)
+                1 -> showConfirm(
+                    context = context,
+                    title = "删除书签？",
+                    message = "将删除第 ${bookmark.page + 1} 页的书签“$displayLabel”。PDF 和批注不会受到影响。",
+                    positiveLabel = "删除",
+                    danger = true,
+                ) {
+                    app.graph.db.writableDatabase.delete(
+                        "bookmarks",
+                        "document_id=? AND page=?",
+                        arrayOf(documentId, bookmark.page.toString()),
+                    )
+                    Toast.makeText(context, "书签已删除", Toast.LENGTH_SHORT).show()
+                    refreshBookmarkList(context)
+                }
+            }
+        }
+    }
+
+    private fun showBookmarkRename(context: ReaderActivity, documentId: String, page: Int, currentLabel: String) {
+        val input = TextInputLayout(context).apply {
+            hint = "书签名称"
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+        }
+        val edit = TextInputEditText(context).apply {
+            setText(currentLabel)
+            setSelectAllOnFocus(true)
+            maxLines = 2
+        }
+        input.addView(
+            edit,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+        )
+        showContent(
+            context = context,
+            title = "编辑第 ${page + 1} 页书签",
+            content = input,
+            positiveLabel = "保存",
+        ) {
+            val app = context.application as? ClassHelperApp ?: return@showContent
+            val label = edit.text?.toString()?.trim().orEmpty().ifBlank { "P${page + 1}" }.take(80)
+            val values = ContentValues().apply { put("label", label) }
+            app.graph.db.writableDatabase.update(
+                "bookmarks",
+                values,
+                "document_id=? AND page=?",
+                arrayOf(documentId, page.toString()),
+            )
+            Toast.makeText(context, "书签已更新", Toast.LENGTH_SHORT).show()
+            refreshBookmarkList(context)
+        }
+        edit.requestFocus()
+    }
+
+    private fun refreshBookmarkList(context: ReaderActivity) {
+        context.findViewById<View>(R.id.bookmarkListButton)?.post {
+            context.findViewById<View>(R.id.bookmarkListButton)?.performClick()
+        }
     }
 
     fun showConfirm(
