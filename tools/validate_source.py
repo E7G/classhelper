@@ -69,7 +69,6 @@ for marker, rel in critical.items():
     if not p.exists() or marker not in p.read_text(errors='ignore'):
         errors.append(f'Critical marker missing: {marker} in {rel}')
 
-
 # v1.4 reader regression checks: keep the immersive layout and known compatibility fixes intact.
 reader_path = ROOT/'app/src/main/java/io/github/paper/classhelper/ui/ReaderActivity.kt'
 reader_text = reader_path.read_text(errors='ignore') if reader_path.exists() else ''
@@ -142,7 +141,6 @@ if 'android.permission.RUN_USER_INITIATED_JOBS' not in manifest or 'android.perm
 if 'AsrModelDownloadJobService.schedule' not in asr_manager:
     errors.append('Download regression: AsrModelManager is not routing Android 14+ downloads through UIDT')
 
-
 # v1.5.4 crash regression: never mix Kotlin interpolation containing a literal % with String.format/.format.
 # This exact pattern caused UnknownFormatConversionException when `% ·` was parsed as a format specifier.
 for rel in [
@@ -159,7 +157,6 @@ settings_text = (ROOT/'app/src/main/java/io/github/paper/classhelper/ui/Settings
 if '后台下载 %d%% · %s · %s' not in settings_text:
     errors.append('Format regression: SettingsActivity download progress must escape literal percent as %%')
 
-
 # v1.7.7 compile-compatibility regressions: keep locally verified build fixes intact.
 build_gradle = (ROOT/'app/build.gradle.kts').read_text(errors='ignore')
 proguard = (ROOT/'app/proguard-rules.pro').read_text(errors='ignore')
@@ -171,7 +168,7 @@ if 'pickFirsts += setOf("**/libonnxruntime.so")' not in build_gradle:
 for attr in ['insetLeft', 'insetRight', 'insetTop', 'insetBottom']:
     if f'name="{attr}"' not in attrs_text:
         errors.append(f'Compile regression: attrs.xml missing {attr}')
-if '<style name="ShapeAppearanceOverlay.ClassHelper">' not in themes_text:
+if not re.search(r'<style\s+name="ShapeAppearanceOverlay\.ClassHelper"(?:\s+[^>]*)?>', themes_text):
     errors.append('Compile regression: ShapeAppearanceOverlay.ClassHelper base style missing')
 if re.search(r'com\.google\.android\.material\.R\.attr\.colorPrimary(?![A-Za-z0-9_])', source):
     errors.append('Compile regression: colorPrimary must be referenced from androidx.appcompat.R.attr')
@@ -185,7 +182,6 @@ for marker in [
 ]:
     if marker not in proguard:
         errors.append(f'Compile regression: missing ProGuard/R8 rule: {marker}')
-
 
 # v1.7.9 annotation persistence regressions: one standard save path for add/erase.
 writer_text = (ROOT/'app/src/main/java/io/github/paper/classhelper/pdf/PdfAnnotationWriter.kt').read_text(errors='ignore')
@@ -202,7 +198,6 @@ for marker in [
 ]:
     if marker not in writer_text:
         errors.append(f'Annotation persistence regression: missing {marker}')
-
 
 if errors:
     print('VALIDATION FAILED')
