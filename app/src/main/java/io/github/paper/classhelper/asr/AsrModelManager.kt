@@ -4,11 +4,15 @@ import android.app.DownloadManager
 import android.app.job.JobScheduler
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Environment
 import androidx.core.content.ContextCompat
-import io.github.paper.classhelper.classroom.AsrModelDownloadService
 import io.github.paper.classhelper.classroom.AsrModelDownloadJobService
+import io.github.paper.classhelper.classroom.AsrModelDownloadService
+import java.io.File
+import java.io.RandomAccessFile
+import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,19 +20,13 @@ import kotlinx.coroutines.launch
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.File
-import java.io.RandomAccessFile
-import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * App-owned SenseVoiceSmall INT8 model manager.
+ * App-owned streaming Zipformer Transducer INT8 model manager.
  *
- * v1.6.2 keeps the local ASR payload as SenseVoiceSmall INT8 (2024-07-17) + Silero VAD.
- * Android 14+ keeps the user-initiated data-transfer job path; Android 13 and below keep the
- * sequential dataSync foreground-service fallback. Bytes are transferred one file at a time with
- * OkHttp + HTTP Range resume into app-private storage.
+ * The model is split into encoder/decoder/joiner/token files so Android can download and resume each
+ * object directly without unpacking a large archive. Android 14+ uses a user-initiated transfer job;
+ * older releases use the existing sequential foreground-service downloader.
  */
 class AsrModelManager(context: Context) {
     data class Source(val name: String, val url: String)
@@ -40,14 +38,14 @@ class AsrModelManager(context: Context) {
         val minimumBytes: Long,
         val sources: List<Source>,
         val expectedBytes: Long? = null,
-        val expectedSha256: String? = null
+        val expectedSha256: String? = null,
     )
 
     data class ModelSpec(
         val id: String,
         val displayName: String,
         val description: String,
-        val files: List<ModelFileSpec>
+        val files: List<ModelFileSpec>,
     ) {
         val approximateBytes: Long get() = files.sumOf { it.approximateBytes }
     }
@@ -63,7 +61,7 @@ class AsrModelManager(context: Context) {
             val filePercent: Int,
             val overallPercent: Int,
             val downloaded: Long,
-            val total: Long
+            val total: Long,
         ) : State
         data class Ready(val directory: File, val totalBytes: Long) : State
         data class Error(val message: String) : State
@@ -86,49 +84,57 @@ class AsrModelManager(context: Context) {
         .retryOnConnectionFailure(true)
         .build()
 
-    private val senseVoiceHfBase =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main"
-    private val senseVoiceMirrorBase =
-        "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main"
+    private val zipformerHfBase =
+        "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/resolve/main"
+    private val zipformerMirrorBase =
+        "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/resolve/main"
 
-    private fun senseVoiceSources(fileName: String): List<Source> = listOf(
-        Source("Hugging Face", "$senseVoiceHfBase/$fileName?download=true"),
-        Source("HF Mirror", "$senseVoiceMirrorBase/$fileName")
+    private fun zipformerSources(fileName: String): List<Source> = listOf(
+        Source("Hugging Face", "$zipformerHfBase/$fileName?download=true"),
+        Source("HF Mirror", "$zipformerMirrorBase/$fileName"),
     )
 
     val model = ModelSpec(
-        id = "sensevoice-small-int8-2024-07-17",
-        displayName = "SenseVoiceSmall INT8 · 中英日韩粤",
-        description = "本地多语言识别 · ITN/标点 · 下载一次后无需 ASR 配置",
+        id = "streaming-zipformer-zh-int8-2025-06-30",
+        displayName = "Zipformer Streaming INT8 · 中文",
+        description = "真正流式中文识别 · 实时 partial · endpoint · 支持热词偏置",
         files = listOf(
             ModelFileSpec(
-                "model.int8.onnx", "SenseVoiceSmall INT8", 239_233_841L, 220_000_000L,
-                senseVoiceSources("model.int8.onnx"),
-                expectedBytes = 239_233_841L
+                fileName = "encoder.int8.onnx",
+                displayName = "Zipformer Encoder INT8",
+                approximateBytes = 161_000_000L,
+                minimumBytes = 150_000_000L,
+                sources = zipformerSources("encoder.int8.onnx"),
             ),
             ModelFileSpec(
-                "tokens.txt", "SenseVoice 词表", 315_894L, 250_000L,
-                senseVoiceSources("tokens.txt"),
-                expectedBytes = 315_894L,
-                expectedSha256 = "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+                fileName = "decoder.onnx",
+                displayName = "Zipformer Decoder",
+                approximateBytes = 5_170_000L,
+                minimumBytes = 4_500_000L,
+                sources = zipformerSources("decoder.onnx"),
             ),
             ModelFileSpec(
-                "silero_vad.onnx", "Silero VAD", 644_000L, 500_000L,
-                listOf(
-                    Source("sherpa-onnx 官方 VAD", "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"),
-                    Source("ModelScope VAD", "https://modelscope.cn/models/xnnehang/k2-fsa-silero-vad/resolve/master/silero_vad.onnx")
-                )
-            )
-        )
+                fileName = "joiner.int8.onnx",
+                displayName = "Zipformer Joiner INT8",
+                approximateBytes = 1_030_000L,
+                minimumBytes = 900_000L,
+                sources = zipformerSources("joiner.int8.onnx"),
+            ),
+            ModelFileSpec(
+                fileName = "tokens.txt",
+                displayName = "Zipformer 中文词表",
+                approximateBytes = 20_600L,
+                minimumBytes = 15_000L,
+                sources = zipformerSources("tokens.txt"),
+            ),
+        ),
     )
 
-
-    // Keep all downloaded ASR payloads under one app-private root; model.id isolates model generations.
     private val externalDownloads = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
     private val externalRootDir = externalDownloads?.let { File(it, "asr_models") }
     private val fallbackRootDir = File(appContext.filesDir, "asr_models")
     private val modelDir = File(externalRootDir ?: fallbackRootDir, model.id)
-    private val verificationMarker get() = File(modelDir, ".verified-v8-sensevoice-token-fix")
+    private val verificationMarker get() = File(modelDir, ".verified-v9-streaming-zipformer")
 
     init {
         modelDir.mkdirs()
@@ -136,7 +142,9 @@ class AsrModelManager(context: Context) {
         cleanupLegacyModels()
         state = readyState() ?: if (hasPartialFiles()) {
             State.Error("上次模型下载未完成，可点击继续下载")
-        } else State.Missing
+        } else {
+            State.Missing
+        }
     }
 
     fun isReady(): Boolean = readyState() != null
@@ -163,19 +171,19 @@ class AsrModelManager(context: Context) {
         }
     }
 
-    /**
-     * Schedules the platform-recommended user-initiated transfer on Android 14+, falling back to the
-     * legacy foreground downloader only on older releases. No network/file IO runs on the UI thread.
-     */
     fun download() {
         readyState()?.let { emit(it); return }
         val usable = (externalRootDir ?: fallbackRootDir).usableSpace
-        val required = 340L * 1024L * 1024L
+        val required = 260L * 1024L * 1024L
         if (usable in 1 until required) {
-            emit(State.Error("存储空间不足：模型约 230 MB，建议至少保留 340 MB；当前可用约 ${usable / 1024 / 1024} MB"))
+            emit(
+                State.Error(
+                    "存储空间不足：流式模型约 165 MB，建议至少保留 260 MB；当前可用约 ${usable / 1024 / 1024} MB",
+                ),
+            )
             return
         }
-        emit(State.Preparing(if (hasPartialFiles()) "正在从断点继续模型下载…" else "正在启动后台模型下载…"))
+        emit(State.Preparing(if (hasPartialFiles()) "正在从断点继续流式模型下载…" else "正在启动流式模型后台下载…"))
         if (android.os.Build.VERSION.SDK_INT >= 34) {
             val result = runCatching { AsrModelDownloadJobService.schedule(appContext, model.approximateBytes) }
             result.onFailure { emit(State.Error("无法启动系统后台下载任务：${it.message ?: it.javaClass.simpleName}")) }
@@ -197,7 +205,9 @@ class AsrModelManager(context: Context) {
         } else {
             runCatching { appContext.stopService(Intent(appContext, AsrModelDownloadService::class.java)) }
         }
-        if (!running.get()) emit(readyState() ?: if (hasPartialFiles()) State.Error("下载已暂停，点击可继续") else State.Missing)
+        if (!running.get()) {
+            emit(readyState() ?: if (hasPartialFiles()) State.Error("下载已暂停，点击可继续") else State.Missing)
+        }
     }
 
     internal fun cancelFromService() {
@@ -220,7 +230,6 @@ class AsrModelManager(context: Context) {
         return ok
     }
 
-    /** Called only from [AsrModelDownloadService]'s single worker thread. */
     internal fun performDownload(onState: (State) -> Unit): State {
         readyState()?.let { emit(it); onState(it); return it }
         if (!running.compareAndSet(false, true)) return currentState()
@@ -238,13 +247,16 @@ class AsrModelManager(context: Context) {
                 for (source in spec.sources) {
                     if (cancelRequested.get()) throw DownloadCancelled()
                     val prep = State.Preparing("正在连接 ${source.name} · ${spec.displayName}")
-                    emit(prep); onState(prep)
+                    emit(prep)
+                    onState(prep)
                     try {
-                        downloadOne(index, spec, source) { progress -> emit(progress); onState(progress) }
+                        downloadOne(index, spec, source) { progress ->
+                            emit(progress)
+                            onState(progress)
+                        }
                         val part = partFile(spec)
                         if (!validateFile(part, spec)) error("${spec.displayName} 文件校验失败")
                         if (final.exists()) final.delete()
-                        final.parentFile?.mkdirs()
                         if (!part.renameTo(final)) {
                             part.copyTo(final, overwrite = true)
                             part.delete()
@@ -266,15 +278,18 @@ class AsrModelManager(context: Context) {
             verificationMarker.parentFile?.mkdirs()
             verificationMarker.writeText(model.id)
             val ready = readyState() ?: error("模型文件已完成，但启用失败")
-            emit(ready); onState(ready)
+            emit(ready)
+            onState(ready)
             return ready
         } catch (_: DownloadCancelled) {
             val paused = readyState() ?: State.Error("下载已暂停，点击可继续")
-            emit(paused); onState(paused)
+            emit(paused)
+            onState(paused)
             return paused
         } catch (t: Throwable) {
             val err = State.Error(t.message ?: "模型下载失败")
-            emit(err); onState(err)
+            emit(err)
+            onState(err)
             return err
         } finally {
             activeCall = null
@@ -286,21 +301,20 @@ class AsrModelManager(context: Context) {
         index: Int,
         spec: ModelFileSpec,
         source: Source,
-        onProgress: (State.Downloading) -> Unit
+        onProgress: (State.Downloading) -> Unit,
     ) {
         val part = partFile(spec)
         part.parentFile?.mkdirs()
         var existing = part.length().coerceAtLeast(0L)
-        // A corrupt HTML/error response can be larger than small tokenizer files. Let validation at
-        // completion reject it; only discard clearly impossible oversized partials here.
         val maxReasonable = maxOf(spec.approximateBytes * 2, spec.minimumBytes * 3)
         if (existing > maxReasonable) {
-            part.delete(); existing = 0L
+            part.delete()
+            existing = 0L
         }
 
         val request = Request.Builder()
             .url(source.url)
-            .header("User-Agent", "ClassHelperNative/1.6.2 Android")
+            .header("User-Agent", "ClassHelperNative/1.9 Android")
             .header("Accept", "application/octet-stream,*/*")
             .apply { if (existing > 0L) header("Range", "bytes=$existing-") }
             .build()
@@ -309,8 +323,6 @@ class AsrModelManager(context: Context) {
         call.execute().use { response ->
             if (response.code == 416) {
                 if (validateFile(part, spec)) return
-                // The remote object and our resume offset disagree. Do not carry a bad partial
-                // into the next mirror; restart cleanly there.
                 part.delete()
                 error("断点已失效，已自动清理并切换下载源")
             }
@@ -348,15 +360,15 @@ class AsrModelManager(context: Context) {
                             lastOverall = overall
                             onProgress(
                                 State.Downloading(
-                                    index + 1,
-                                    model.files.size,
-                                    spec.displayName,
-                                    source.name,
-                                    filePercent,
-                                    overall,
-                                    wholeDone,
-                                    wholeTotal
-                                )
+                                    fileIndex = index + 1,
+                                    fileCount = model.files.size,
+                                    fileName = spec.displayName,
+                                    source = source.name,
+                                    filePercent = filePercent,
+                                    overallPercent = overall,
+                                    downloaded = wholeDone,
+                                    total = wholeTotal,
+                                ),
                             )
                         }
                     }
@@ -384,10 +396,6 @@ class AsrModelManager(context: Context) {
                 val prefix = head.copyOf(n).toString(Charsets.UTF_8).trimStart().lowercase()
                 if (prefix.startsWith("<html") || prefix.startsWith("<!doctype")) return@use false
                 when {
-                    spec.fileName.endsWith(".json") -> prefix.startsWith("{") || prefix.startsWith("[")
-                    // sherpa-onnx token tables legitimately contain special tokens such as
-                    // <blk>, <unk>, <s> ... . Rejecting every TXT file that begins with '<'
-                    // made a correctly downloaded SenseVoice tokens.txt fail validation forever.
                     spec.fileName.endsWith(".txt") -> !prefix.startsWith("{") && !prefix.startsWith("[")
                     else -> !prefix.startsWith("{") && !prefix.startsWith("[") && !prefix.startsWith("<")
                 }
@@ -395,8 +403,6 @@ class AsrModelManager(context: Context) {
         }.getOrDefault(false)
         if (!contentLooksValid) return false
 
-        // Hash only the tiny tokenizer file. Hashing the 239 MB ONNX file from every UI refresh
-        // would waste CPU/battery; the pinned ONNX byte length still catches truncated/error files.
         spec.expectedSha256?.let { expected ->
             val actual = runCatching { sha256(file) }.getOrNull() ?: return false
             if (!actual.equals(expected, ignoreCase = true)) return false
@@ -422,56 +428,34 @@ class AsrModelManager(context: Context) {
     private fun legacyDownloadFile(spec: ModelFileSpec) = File(modelDir, spec.fileName + ".download")
     private fun hasPartialFiles() = model.files.any { partFile(it).isFile && partFile(it).length() > 0L }
 
-    /**
-     * Older builds used DownloadManager. Best-effort cleanup is retained so stale system tasks cannot
-     * keep downloading obsolete ASR payloads after an upgrade.
-     */
     private fun migrateLegacySystemDownloads() {
         runCatching {
             val oldPrefs = appContext.getSharedPreferences("asr_model_downloads_v5_qwen3", Context.MODE_PRIVATE)
             val dm = appContext.getSystemService(DownloadManager::class.java)
-            // Cancel every persisted Qwen DownloadManager task, not only filenames that happen to
-            // overlap with the new SenseVoice payload. This prevents an obsolete ~1 GB model from
-            // continuing to download after an upgrade.
             oldPrefs.all.values.filterIsInstance<Long>().filter { it >= 0L }.forEach { id ->
                 runCatching { dm?.remove(id) }
-            }
-            model.files.forEach { spec ->
-                val key = "id_" + spec.fileName.replace('.', '_').replace('/', '_')
-                val id = oldPrefs.getLong(key, -1L)
-                if (id >= 0L) runCatching { dm?.remove(id) }
-
-                val old = legacyDownloadFile(spec)
-                if (!old.isFile) return@forEach
-                val final = finalFile(spec)
-                if (validateFile(old, spec)) {
-                    final.parentFile?.mkdirs()
-                    if (final.exists()) final.delete()
-                    if (!old.renameTo(final)) { old.copyTo(final, overwrite = true); old.delete() }
-                } else {
-                    val part = partFile(spec)
-                    part.parentFile?.mkdirs()
-                    if (!part.exists() || old.length() > part.length()) {
-                        if (part.exists()) part.delete()
-                        if (!old.renameTo(part)) { old.copyTo(part, overwrite = true); old.delete() }
-                    } else old.delete()
-                }
             }
             oldPrefs.edit().clear().apply()
         }
     }
 
     private fun cleanupLegacyModels() {
-        val root = modelDir.parentFile ?: return
-        listOf(
-            File(root, "streaming-paraformer-bilingual-zh-en-int8"),
-            File(root, "qwen3-asr-0.6b-int8-2026-03-25"),
-            File(appContext.filesDir, "asr_models/streaming-paraformer-bilingual-zh-en-int8"),
-            File(appContext.filesDir, "asr_models/qwen3-asr-0.6b-int8-2026-03-25")
-        ).forEach { old ->
-            if (old.absolutePath != modelDir.absolutePath) runCatching { old.deleteRecursively() }
+        val roots = buildList {
+            modelDir.parentFile?.let(::add)
+            add(File(appContext.filesDir, "asr_models"))
+        }.distinctBy { it.absolutePath }
+        val legacyIds = listOf(
+            "sensevoice-small-int8-2024-07-17",
+            "streaming-paraformer-bilingual-zh-en-int8",
+            "qwen3-asr-0.6b-int8-2026-03-25",
+        )
+        roots.forEach { root ->
+            legacyIds.forEach { id ->
+                val old = File(root, id)
+                if (old.absolutePath != modelDir.absolutePath) runCatching { old.deleteRecursively() }
+            }
+            listOf("ggml-base-q5_1.bin", "ggml-base-q5_1.bin.part").forEach { File(root, it).delete() }
         }
-        listOf("ggml-base-q5_1.bin", "ggml-base-q5_1.bin.part").forEach { File(root, it).delete() }
     }
 
     internal fun reportState(newState: State) = emit(newState)

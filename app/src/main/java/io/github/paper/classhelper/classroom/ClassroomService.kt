@@ -12,23 +12,23 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import io.github.paper.classhelper.ClassHelperApp
 import io.github.paper.classhelper.R
-import io.github.paper.classhelper.asr.LocalSenseVoiceAsrEngine
+import io.github.paper.classhelper.asr.LocalZipformerAsrEngine
 import io.github.paper.classhelper.asr.StreamingAsrEngine
 import io.github.paper.classhelper.audio.AudioCapture
 import io.github.paper.classhelper.ui.ReaderActivity
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -47,7 +47,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     override fun onCreate() {
         super.onCreate()
         app = application as ClassHelperApp
-        asr = LocalSenseVoiceAsrEngine(app.graph.asrModels)
+        asr = LocalZipformerAsrEngine(app.graph.asrModels) { buildAsrHotwords() }
         audio = AudioCapture()
         questions = QuestionPipeline(this, scope)
         notes = AutoNotePipeline(app, scope)
@@ -75,7 +75,14 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
             val title = "课堂 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}"
             app.graph.db.startSession(title, app.graph.settings.currentDocumentId).also { app.graph.settings.activeSessionId = it }
         }
-        ClassroomBus.update { it.copy(listening = true, stopping = false, status = "正在启动本地语音识别…", sessionId = sessionId) }
+        ClassroomBus.update {
+            it.copy(
+                listening = true,
+                stopping = false,
+                status = "正在启动 Zipformer 实时中文识别…",
+                sessionId = sessionId,
+            )
+        }
         asr.start(this)
         audio.start(onChunk = { asr.sendPcm16(it) }, onError = { onError("录音失败：${it.message}", it) })
     }
@@ -122,6 +129,50 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         updateNotification(message)
     }
 
+    /**
+     * Build a small contextual-bias list for the streaming transducer. User-entered terms are kept
+     * first, then the current PDF contributes its title, nearby section titles, quoted terminology,
+     * and compact uppercase technical tokens. Keeping the list small avoids slowing beam search.
+     */
+    private fun buildAsrHotwords(): String {
+        val terms = LinkedHashSet<String>()
+
+        fun add(raw: String) {
+            raw.split(HOTWORD_SPLIT).forEach { part ->
+                val clean = part
+                    .trim()
+                    .removeSuffix(".pdf")
+                    .removeSuffix(".PDF")
+                    .replace('/', ' ')
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                if (clean.length !in 2..24) return@forEach
+                if (clean.matches(Regex("(?i)^P?\\d{1,4}$"))) return@forEach
+                if (clean.all { it.isDigit() }) return@forEach
+                terms += clean
+            }
+        }
+
+        add(app.graph.settings.hotwords)
+
+        val docId = app.graph.settings.currentDocumentId
+        if (docId != null) {
+            app.graph.db.getDocument(docId)?.title?.let(::add)
+            val chunks = runCatching {
+                app.graph.db.chunksNearPage(docId, app.graph.settings.currentPage, radius = 4)
+            }.getOrDefault(emptyList())
+
+            chunks.forEach { chunk ->
+                add(chunk.title)
+                val text = chunk.text.take(12_000)
+                QUOTED_TERM.findAll(text).forEach { match -> add(match.groupValues[1]) }
+                TECH_TERM.findAll(text).forEach { match -> add(match.value) }
+            }
+        }
+
+        return terms.asSequence().take(MAX_HOTWORDS).joinToString("/")
+    }
+
     private fun gracefulStop() {
         if (stopping) return
         stopping = true
@@ -130,8 +181,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在停止录音并收尾…") }
         updateNotification("录音已停止 · 正在收尾最后一句")
 
-        // A backend finish callback should normally arrive quickly, but never let a missed
-        // callback leave the foreground service and UI stuck in “结束听课” forever.
         scope.launch {
             delay(6_000L)
             continueStopSequence()
@@ -147,10 +196,8 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
             ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在整理最后课堂笔记…") }
             updateNotification("录音已结束 · 正在整理最后课堂笔记")
             val done = CompletableDeferred<Unit>()
-            // Keep the actual LLM request in process scope so a service teardown cannot cancel it.
             AutoNotePipeline(app, app.applicationScope).summarizeNow(finishingSession) { done.complete(Unit) }
             scope.launch {
-                // Do not keep the microphone foreground service around indefinitely on slow networks.
                 withTimeoutOrNull(12_000L) { done.await() }
                 finishSessionAndStop(finishingSession)
             }
@@ -171,12 +218,13 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         partialQuestionJob?.cancel()
         asr.stop()
         if (started && !stopping) {
-            // Unexpected process/service teardown: keep session open so START_STICKY can resume it.
             app.graph.settings.activeSessionId = sessionId
         }
         started = false
         scope.cancel()
-        ClassroomBus.update { it.copy(listening = false, stopping = false, status = "未开始听课", partial = "", sessionId = null) }
+        ClassroomBus.update {
+            it.copy(listening = false, stopping = false, status = "未开始听课", partial = "", sessionId = null)
+        }
         super.onDestroy()
     }
 
@@ -185,16 +233,24 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private fun createChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "后台听课", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "保持麦克风流式识别"; setSound(null, null)
-            }
+                description = "保持麦克风流式识别"
+                setSound(null, null)
+            },
         )
     }
 
     private fun startAsForeground() {
         val notification = buildNotification("正在后台听课")
         if (Build.VERSION.SDK_INT >= 29) {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else startForeground(NOTIFICATION_ID, notification)
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun updateNotification(text: String) {
@@ -202,8 +258,18 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     }
 
     private fun buildNotification(text: String): android.app.Notification {
-        val open = PendingIntent.getActivity(this, 11, Intent(this, ReaderActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(this, 12, Intent(this, ClassroomService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(
+            this,
+            11,
+            Intent(this, ReaderActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val stop = PendingIntent.getService(
+            this,
+            12,
+            Intent(this, ClassroomService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_class)
             .setContentTitle("课堂助手正在听课")
@@ -220,5 +286,9 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         const val ACTION_STOP = "io.github.paper.classhelper.STOP_CLASS"
         private const val CHANNEL_ID = "classhelper_listening"
         private const val NOTIFICATION_ID = 101
+        private const val MAX_HOTWORDS = 48
+        private val HOTWORD_SPLIT = Regex("[\\r\\n,，;；/]+")
+        private val QUOTED_TERM = Regex("[《“「『【]([^》”」』】\\n]{2,24})[》”」』】]")
+        private val TECH_TERM = Regex("\\b[A-Z][A-Z0-9+.#_-]{1,15}\\b")
     }
 }
