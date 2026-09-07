@@ -20,23 +20,21 @@ import io.github.paper.classhelper.ClassHelperApp
 import io.github.paper.classhelper.classroom.ClassroomBus
 import io.github.paper.classhelper.classroom.ClassroomUiState
 import java.lang.ref.WeakReference
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * YouTube-style live captions for the reader screen.
+ * Compact live captions for the reader screen.
  *
- * This deliberately sits outside ReaderActivity's PDF/annotation gesture hierarchy so showing
- * captions cannot steal touches from PDFView or InkOverlayView. The controller reuses the existing
- * ClassroomBus stream and only queries finalized transcript rows when historyVersion changes.
+ * The caption intentionally lives in a small lower-left overlay above the reader bottom chrome.
+ * It is non-clickable/non-focusable, so PDF gestures and reader controls remain the touch target.
  */
 object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
     private const val FINAL_HOLD_MS = 4_500L
-    private const val CURRENT_CHAR_WINDOW = 128
-    private const val PREVIOUS_CHAR_WINDOW = 82
+    private const val CURRENT_CHAR_WINDOW = 96
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var installed = false
@@ -48,7 +46,7 @@ object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
     private var latestState = ClassroomUiState()
     private var cachedSessionId: String? = null
     private var cachedHistoryVersion = Long.MIN_VALUE
-    private var cachedFinals: List<String> = emptyList()
+    private var cachedFinal = ""
     private var lastRenderedSignature = ""
 
     fun install(application: ClassHelperApp) {
@@ -62,12 +60,16 @@ object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
                 if (state.sessionId != cachedSessionId || state.historyVersion != cachedHistoryVersion) {
                     cachedSessionId = state.sessionId
                     cachedHistoryVersion = state.historyVersion
-                    cachedFinals = if (state.sessionId == null) {
-                        emptyList()
+                    cachedFinal = if (state.sessionId == null) {
+                        ""
                     } else {
                         runCatching {
-                            app.graph.db.recentTranscripts(2, state.sessionId).map { it.text.trim() }.filter { it.isNotBlank() }
-                        }.getOrDefault(emptyList())
+                            app.graph.db.recentTranscripts(1, state.sessionId)
+                                .lastOrNull()
+                                ?.text
+                                ?.trim()
+                                .orEmpty()
+                        }.getOrDefault("")
                     }
                 }
                 withContext(Dispatchers.Main) { render(state) }
@@ -88,11 +90,7 @@ object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
         }
 
         val partial = compact(state.partial, CURRENT_CHAR_WINDOW)
-        val latestFinal = compact(cachedFinals.lastOrNull().orEmpty(), CURRENT_CHAR_WINDOW)
-        val previousFinal = compact(
-            if (partial.isNotBlank()) cachedFinals.lastOrNull().orEmpty() else cachedFinals.dropLast(1).lastOrNull().orEmpty(),
-            PREVIOUS_CHAR_WINDOW
-        )
+        val latestFinal = compact(cachedFinal, CURRENT_CHAR_WINDOW)
         val current = partial.ifBlank { latestFinal }
 
         if (current.isBlank()) {
@@ -102,11 +100,11 @@ object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
         }
 
         val isPartial = partial.isNotBlank()
-        val signature = "$previousFinal\u0000$current\u0000$isPartial"
+        val signature = "$current\u0000$isPartial"
         if (signature == lastRenderedSignature) return
         lastRenderedSignature = signature
 
-        caption.show(previousFinal, current, isPartial)
+        caption.show(current, isPartial)
         cancelHide()
         if (!isPartial) {
             val runnable = Runnable {
@@ -130,19 +128,22 @@ object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
         val view = LiveSubtitleView(activity)
         val density = activity.resources.displayMetrics.density
         val widthDp = activity.resources.displayMetrics.widthPixels / density
-        val horizontalMarginDp = when {
-            widthDp >= 1000f -> ((widthDp - 760f) / 2f).toInt().coerceAtLeast(24)
-            widthDp >= 600f -> 72
-            else -> 16
-        }
+        val captionWidthDp = when {
+            widthDp >= 1000f -> 340
+            widthDp >= 600f -> 300
+            else -> 240
+        }.coerceAtMost((widthDp - 24f).toInt().coerceAtLeast(180))
+        val edgeMarginDp = if (widthDp >= 600f) 16 else 12
+
         root.addView(
             view,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                val h = (horizontalMarginDp * density).toInt()
-                leftMargin = h
-                rightMargin = h
-                bottomMargin = (86f * density).toInt()
+            FrameLayout.LayoutParams(
+                (captionWidthDp * density).toInt(),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                leftMargin = (edgeMarginDp * density).toInt()
+                bottomMargin = (76f * density).toInt()
             }
         )
         overlay = view
@@ -191,51 +192,51 @@ object LiveSubtitleController : Application.ActivityLifecycleCallbacks {
 
 private class LiveSubtitleView(activity: Activity) : LinearLayout(activity) {
     private val density = resources.displayMetrics.density
-    private val previousLine = captionTextView(14f, Color.argb(190, 255, 255, 255), false).apply {
-        maxLines = 1
-        ellipsize = TextUtils.TruncateAt.START
-        visibility = View.GONE
-    }
-    private val currentLine = captionTextView(19f, Color.WHITE, true).apply {
-        maxLines = 3
+    private val currentLine = captionTextView(14.5f, Color.WHITE, true).apply {
+        maxLines = 2
         ellipsize = TextUtils.TruncateAt.START
     }
 
     init {
         orientation = VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
+        gravity = Gravity.START
         visibility = View.GONE
         alpha = 0f
-        translationY = dp(10).toFloat()
-        elevation = dp(8).toFloat()
-        setPadding(dp(16), dp(10), dp(16), dp(11))
+        translationY = dp(6).toFloat()
+        elevation = dp(5).toFloat()
+        setPadding(dp(10), dp(7), dp(10), dp(8))
         background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(11).toFloat()
-            setColor(Color.argb(218, 10, 10, 10))
-            setStroke(dp(1), Color.argb(55, 255, 255, 255))
+            cornerRadius = dp(9).toFloat()
+            setColor(Color.argb(196, 8, 8, 8))
+            setStroke(dp(1), Color.argb(38, 255, 255, 255))
         }
+
+        // The subtitle is visual-only for touch handling; it must never compete with reader controls.
+        isClickable = false
+        isLongClickable = false
+        isFocusable = false
+        isFocusableInTouchMode = false
+        currentLine.isClickable = false
+        currentLine.isLongClickable = false
+        currentLine.isFocusable = false
+
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        addView(previousLine, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        addView(currentLine, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(2)
-        })
+        addView(currentLine, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
     }
 
-    fun show(previous: String, current: String, partial: Boolean) {
-        previousLine.text = previous
-        previousLine.visibility = if (previous.isBlank()) View.GONE else View.VISIBLE
+    fun show(current: String, partial: Boolean) {
         currentLine.text = current
-        currentLine.alpha = if (partial) 1f else 0.96f
-        contentDescription = if (previous.isBlank()) "实时字幕：$current" else "实时字幕：$previous，$current"
+        currentLine.alpha = if (partial) 1f else 0.94f
+        contentDescription = "实时字幕：$current"
 
         if (visibility != View.VISIBLE || alpha < 0.95f) {
             animate().cancel()
             visibility = View.VISIBLE
             alpha = 0f
-            translationY = dp(10).toFloat()
-            animate().alpha(1f).translationY(0f).setDuration(150L).start()
+            translationY = dp(6).toFloat()
+            animate().alpha(1f).translationY(0f).setDuration(120L).start()
         }
     }
 
@@ -249,11 +250,11 @@ private class LiveSubtitleView(activity: Activity) : LinearLayout(activity) {
         }
         animate()
             .alpha(0f)
-            .translationY(dp(6).toFloat())
-            .setDuration(220L)
+            .translationY(dp(4).toFloat())
+            .setDuration(180L)
             .withEndAction {
                 visibility = View.GONE
-                translationY = dp(10).toFloat()
+                translationY = dp(6).toFloat()
             }
             .start()
     }
@@ -261,9 +262,9 @@ private class LiveSubtitleView(activity: Activity) : LinearLayout(activity) {
     private fun captionTextView(sizeSp: Float, color: Int, bold: Boolean) = TextView(context).apply {
         setTextColor(color)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-        gravity = Gravity.CENTER
+        gravity = Gravity.START
         includeFontPadding = false
-        setLineSpacing(dp(2).toFloat(), 1f)
+        setLineSpacing(dp(1).toFloat(), 1f)
         if (bold) typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
 
