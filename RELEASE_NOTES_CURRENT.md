@@ -1,7 +1,6 @@
-- 本地 ASR 从 SenseVoiceSmall + VAD 分段离线识别切换为 Zipformer Streaming Transducer INT8，老师讲话过程中持续解码，不再等待整句停顿后才开始识别。
-- 新增真正实时 partial 转写，约 60 ms 音频帧持续送入 sherpa-onnx OnlineRecognizer，左下角小字幕会随讲话内容连续更新。
-- 使用 endpoint 自动断句：讲话后的短停顿即可提交最终句，长句也会自动切分，降低课堂连续讲话造成的字幕延迟。
-- 支持 Transducer 热词偏置：设置中的课程术语会直接参与 modified beam search，提高专业词、人名、缩写等识别命中率。
-- 当前 PDF 会自动贡献上下文热词：优先提取文档标题、当前页附近章节标题、引号/书名号中的术语和大写技术缩写，无需每节课手动维护完整词表。
-- 默认模型改为 sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30，模型约 165 MB；旧 SenseVoice 模型目录升级后自动清理，释放存储空间。
-- 保留原有课堂记录、问题检测、自动笔记、PDF 页匹配和紧凑左下角字幕逻辑；ASR 音频仍完全在设备本地处理。
+- 修复 Zipformer 流式识别长时间运行后可能出现的 Java 堆 OOM：旧实现每约 60 ms 创建一个 FloatArray 并向单线程 Executor 无界排队，设备一旦解码速度低于录音速度就会持续积压。
+- 音频输入改为有界实时队列，同一时间只保留一个 drain 任务，最多缓存 8 个约 60 ms 音频帧（约 480 ms）。
+- 当设备短时过载时优先丢弃最旧、已经过时的音频帧，避免字幕越来越延迟，也不会再让待解码任务无限吃满 Java 堆。
+- 新增 FloatArray 小对象池，循环复用 PCM 浮点缓冲，进一步降低持续听课时的 GC 压力和内存抖动。
+- 保留 Zipformer Streaming Transducer、实时 partial、endpoint 自动断句、PDF/手动热词、课堂记录、自动笔记和左下角字幕。
+- 不使用 android:largeHeap 掩盖问题；本次直接修复音频背压与内存增长根因。

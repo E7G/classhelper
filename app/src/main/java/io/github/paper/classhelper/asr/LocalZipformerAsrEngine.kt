@@ -9,15 +9,16 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
+import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * True streaming Chinese ASR based on sherpa-onnx Zipformer Transducer INT8.
  *
- * Unlike the old SenseVoice path, audio is decoded continuously. The listener receives partial text
- * as the teacher is speaking; endpoint detection finalizes an utterance after a short pause and then
- * immediately keeps listening on the same stream. Optional hotwords use modified beam search.
+ * Audio capture is intentionally decoupled from decode through a tiny bounded queue. This avoids an
+ * unbounded Executor backlog when a device temporarily decodes slower than real time: stale audio is
+ * discarded instead of consuming the Java heap and making subtitles progressively later.
  */
 class LocalZipformerAsrEngine(
     private val models: AsrModelManager,
@@ -27,6 +28,12 @@ class LocalZipformerAsrEngine(
         Thread(r, "ClassHelper-Zipformer-Streaming").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
     private val running = AtomicBoolean(false)
+
+    private val audioLock = Any()
+    private val pendingAudio = ArrayDeque<FloatArray>(MAX_PENDING_AUDIO_FRAMES)
+    private val samplePool = ArrayDeque<FloatArray>(MAX_SAMPLE_POOL_FRAMES)
+    private var drainScheduled = false
+    private var droppedAudioFrames = 0L
 
     @Volatile private var listener: StreamingAsrEngine.Listener? = null
     private var recognizer: OnlineRecognizer? = null
@@ -72,7 +79,7 @@ class LocalZipformerAsrEngine(
                     ),
                     enableEndpoint = true,
                     decodingMethod = if (hotwords.isBlank()) "greedy_search" else "modified_beam_search",
-                    maxActivePaths = if (hotwords.isBlank()) 4 else 4,
+                    maxActivePaths = 4,
                     hotwordsScore = 2.0f,
                 )
                 val createdRecognizer = OnlineRecognizer(assetManager = null, config = config)
@@ -81,6 +88,9 @@ class LocalZipformerAsrEngine(
                 stream = createdStream
                 lastPartial = ""
                 speechStatusShown = false
+                synchronized(audioLock) {
+                    droppedAudioFrames = 0L
+                }
                 if (running.get()) {
                     listener.onState(
                         if (hotwords.isBlank()) "Zipformer 已就绪 · 实时中文识别"
@@ -89,6 +99,7 @@ class LocalZipformerAsrEngine(
                 }
             } catch (t: Throwable) {
                 running.set(false)
+                clearAudioQueue()
                 listener.onError("Zipformer 初始化失败：${t.message ?: t.javaClass.simpleName}", t)
                 releaseNative()
             }
@@ -97,19 +108,82 @@ class LocalZipformerAsrEngine(
 
     override fun sendPcm16(chunk: ByteArray) {
         if (!running.get() || chunk.size < 2) return
-        // AudioCapture reuses its byte array; convert before returning to the capture thread.
-        val samples = FloatArray(chunk.size / 2)
+
+        // AudioCapture reuses its ByteArray. Reuse a small pool of FloatArrays to keep GC pressure low.
+        val samples = obtainSampleBuffer(chunk.size / 2)
         var src = 0
         var dst = 0
-        while (src + 1 < chunk.size) {
+        while (src + 1 < chunk.size && dst < samples.size) {
             val value = ((chunk[src].toInt() and 0xff) or (chunk[src + 1].toInt() shl 8)).toShort()
             samples[dst++] = value / 32768.0f
             src += 2
         }
-        runCatching {
-            worker.execute {
-                if (running.get()) acceptSamples(samples)
+
+        var shouldScheduleDrain = false
+        synchronized(audioLock) {
+            if (!running.get()) {
+                recycleSampleBufferLocked(samples)
+                return
             }
+            if (pendingAudio.size >= MAX_PENDING_AUDIO_FRAMES) {
+                val stale = pendingAudio.removeFirst()
+                recycleSampleBufferLocked(stale)
+                droppedAudioFrames++
+            }
+            pendingAudio.addLast(samples)
+            if (!drainScheduled) {
+                drainScheduled = true
+                shouldScheduleDrain = true
+            }
+        }
+
+        if (shouldScheduleDrain) {
+            runCatching { worker.execute { drainAudioQueue() } }
+                .onFailure { clearAudioQueue() }
+        }
+    }
+
+    /**
+     * Drain all currently queued frames in one worker task. At most MAX_PENDING_AUDIO_FRAMES frames
+     * can exist, so decoder slowdown cannot create an unbounded Runnable/FloatArray backlog.
+     */
+    private fun drainAudioQueue() {
+        while (running.get()) {
+            val samples = synchronized(audioLock) {
+                if (pendingAudio.isEmpty()) {
+                    drainScheduled = false
+                    null
+                } else {
+                    pendingAudio.removeFirst()
+                }
+            } ?: return
+
+            try {
+                acceptSamples(samples)
+            } finally {
+                synchronized(audioLock) { recycleSampleBufferLocked(samples) }
+            }
+        }
+        clearAudioQueue()
+    }
+
+    private fun obtainSampleBuffer(size: Int): FloatArray = synchronized(audioLock) {
+        if (samplePool.isEmpty()) {
+            FloatArray(size)
+        } else {
+            val pooled = samplePool.removeFirst()
+            if (pooled.size == size) pooled else FloatArray(size)
+        }
+    }
+
+    private fun recycleSampleBufferLocked(samples: FloatArray) {
+        if (samplePool.size < MAX_SAMPLE_POOL_FRAMES) samplePool.addLast(samples)
+    }
+
+    private fun clearAudioQueue() {
+        synchronized(audioLock) {
+            while (pendingAudio.isNotEmpty()) recycleSampleBufferLocked(pendingAudio.removeFirst())
+            drainScheduled = false
         }
     }
 
@@ -155,6 +229,8 @@ class LocalZipformerAsrEngine(
             onFinished()
             return
         }
+        // AudioCapture is stopped before finish(), so the single drain task ahead of this control task
+        // consumes every bounded pending frame first. There is no ever-growing queue to wait through.
         runCatching {
             worker.execute {
                 try {
@@ -178,14 +254,17 @@ class LocalZipformerAsrEngine(
 
     override fun stop() {
         if (!running.getAndSet(false)) {
+            clearAudioQueue()
             releaseNative()
             return
         }
+        clearAudioQueue()
         runCatching { worker.execute { releaseNative() } }
         worker.shutdown()
     }
 
     private fun releaseNative() {
+        clearAudioQueue()
         runCatching { stream?.release() }
         stream = null
         runCatching { recognizer?.release() }
@@ -212,5 +291,8 @@ class LocalZipformerAsrEngine(
     companion object {
         private const val SAMPLE_RATE = 16_000
         private const val MAX_HOTWORDS = 64
+        // AudioCapture emits ~60 ms frames: 8 frames = ~480 ms maximum queued audio.
+        private const val MAX_PENDING_AUDIO_FRAMES = 8
+        private const val MAX_SAMPLE_POOL_FRAMES = MAX_PENDING_AUDIO_FRAMES + 2
     }
 }
