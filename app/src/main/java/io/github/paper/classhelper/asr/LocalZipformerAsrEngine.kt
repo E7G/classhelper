@@ -9,16 +9,16 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
-import java.util.ArrayDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * True streaming Chinese ASR based on sherpa-onnx Zipformer Transducer INT8.
  *
- * Audio capture is intentionally decoupled from decode through a tiny bounded queue. This avoids an
- * unbounded Executor backlog when a device temporarily decodes slower than real time: stale audio is
- * discarded instead of consuming the Java heap and making subtitles progressively later.
+ * PCM is buffered in one fixed-size 16-bit ring instead of creating one FloatArray/Runnable for
+ * every capture frame. The worker decodes several 60 ms capture frames as one batch. This keeps
+ * memory bounded, reduces JNI/decode overhead, and never intentionally discards older classroom
+ * audio just to keep subtitles visually current.
  */
 class LocalZipformerAsrEngine(
     private val models: AsrModelManager,
@@ -29,11 +29,14 @@ class LocalZipformerAsrEngine(
     }
     private val running = AtomicBoolean(false)
 
-    private val audioLock = Any()
-    private val pendingAudio = ArrayDeque<FloatArray>(MAX_PENDING_AUDIO_FRAMES)
-    private val samplePool = ArrayDeque<FloatArray>(MAX_SAMPLE_POOL_FRAMES)
+    private val audioLock = Object()
+    private val pcmRing = ByteArray(PCM_RING_CAPACITY_BYTES)
+    private val decodePcm = ByteArray(DECODE_BATCH_BYTES)
+    private val decodeSamples = FloatArray(DECODE_BATCH_BYTES / 2)
+    private var pcmRead = 0
+    private var pcmWrite = 0
+    private var pcmSize = 0
     private var drainScheduled = false
-    private var droppedAudioFrames = 0L
 
     @Volatile private var listener: StreamingAsrEngine.Listener? = null
     private var recognizer: OnlineRecognizer? = null
@@ -44,6 +47,7 @@ class LocalZipformerAsrEngine(
     override fun start(listener: StreamingAsrEngine.Listener) {
         if (!running.compareAndSet(false, true)) return
         this.listener = listener
+        clearPcmRing()
         listener.onState("正在加载 Zipformer 流式中文模型…")
 
         val dir = models.modelDirectory()
@@ -88,18 +92,16 @@ class LocalZipformerAsrEngine(
                 stream = createdStream
                 lastPartial = ""
                 speechStatusShown = false
-                synchronized(audioLock) {
-                    droppedAudioFrames = 0L
-                }
                 if (running.get()) {
                     listener.onState(
                         if (hotwords.isBlank()) "Zipformer 已就绪 · 实时中文识别"
                         else "Zipformer 已就绪 · 实时中文识别 · 热词已启用",
                     )
+                    scheduleDrainIfNeeded()
                 }
             } catch (t: Throwable) {
                 running.set(false)
-                clearAudioQueue()
+                clearPcmRing()
                 listener.onError("Zipformer 初始化失败：${t.message ?: t.javaClass.simpleName}", t)
                 releaseNative()
             }
@@ -109,81 +111,135 @@ class LocalZipformerAsrEngine(
     override fun sendPcm16(chunk: ByteArray) {
         if (!running.get() || chunk.size < 2) return
 
-        // AudioCapture reuses its ByteArray. Reuse a small pool of FloatArrays to keep GC pressure low.
-        val samples = obtainSampleBuffer(chunk.size / 2)
+        var shouldSchedule = false
+        synchronized(audioLock) {
+            // The ring holds about three minutes of raw PCM. We do not discard old audio when it is
+            // full. Instead the capture thread waits briefly for the decoder to free space. With the
+            // batched decoder this path should only be reachable on severely overloaded devices.
+            while (running.get() && pcmRing.size - pcmSize < chunk.size) {
+                try {
+                    audioLock.wait(RING_FULL_WAIT_MS)
+                } catch (_: InterruptedException) {
+                    if (!running.get()) return
+                }
+            }
+            if (!running.get()) return
+
+            var src = 0
+            var remaining = chunk.size
+            while (remaining > 0) {
+                val count = minOf(remaining, pcmRing.size - pcmWrite)
+                System.arraycopy(chunk, src, pcmRing, pcmWrite, count)
+                pcmWrite = (pcmWrite + count) % pcmRing.size
+                pcmSize += count
+                src += count
+                remaining -= count
+            }
+            if (!drainScheduled && pcmSize >= DECODE_BATCH_BYTES) {
+                drainScheduled = true
+                shouldSchedule = true
+            }
+        }
+
+        if (shouldSchedule) {
+            runCatching { worker.execute { drainPcmBatches() } }
+                .onFailure {
+                    synchronized(audioLock) {
+                        drainScheduled = false
+                        audioLock.notifyAll()
+                    }
+                }
+        }
+    }
+
+    private fun scheduleDrainIfNeeded() {
+        var shouldSchedule = false
+        synchronized(audioLock) {
+            if (running.get() && !drainScheduled && pcmSize >= DECODE_BATCH_BYTES) {
+                drainScheduled = true
+                shouldSchedule = true
+            }
+        }
+        if (shouldSchedule) {
+            runCatching { worker.execute { drainPcmBatches() } }
+                .onFailure {
+                    synchronized(audioLock) {
+                        drainScheduled = false
+                        audioLock.notifyAll()
+                    }
+                }
+        }
+    }
+
+    /** Decode 4 capture frames (~240 ms) per JNI/recognizer feed to reduce per-frame overhead. */
+    private fun drainPcmBatches() {
+        while (running.get()) {
+            val hasBatch = synchronized(audioLock) {
+                if (pcmSize < DECODE_BATCH_BYTES) {
+                    drainScheduled = false
+                    false
+                } else {
+                    readPcmLocked(decodePcm, DECODE_BATCH_BYTES)
+                    audioLock.notifyAll()
+                    true
+                }
+            }
+            if (!hasBatch) return
+            convertPcm16ToFloat(decodePcm, decodeSamples, DECODE_BATCH_BYTES)
+            acceptSamples(decodeSamples)
+        }
+        synchronized(audioLock) {
+            drainScheduled = false
+            audioLock.notifyAll()
+        }
+    }
+
+    private fun readPcmLocked(target: ByteArray, count: Int) {
+        var dst = 0
+        var remaining = count
+        while (remaining > 0) {
+            val copy = minOf(remaining, pcmRing.size - pcmRead)
+            System.arraycopy(pcmRing, pcmRead, target, dst, copy)
+            pcmRead = (pcmRead + copy) % pcmRing.size
+            pcmSize -= copy
+            dst += copy
+            remaining -= copy
+        }
+    }
+
+    private fun convertPcm16ToFloat(source: ByteArray, target: FloatArray, byteCount: Int) {
         var src = 0
         var dst = 0
-        while (src + 1 < chunk.size && dst < samples.size) {
-            val value = ((chunk[src].toInt() and 0xff) or (chunk[src + 1].toInt() shl 8)).toShort()
-            samples[dst++] = value / 32768.0f
+        while (src + 1 < byteCount && dst < target.size) {
+            val value = ((source[src].toInt() and 0xff) or (source[src + 1].toInt() shl 8)).toShort()
+            target[dst++] = value / 32768.0f
             src += 2
         }
-
-        var shouldScheduleDrain = false
-        synchronized(audioLock) {
-            if (!running.get()) {
-                recycleSampleBufferLocked(samples)
-                return
-            }
-            if (pendingAudio.size >= MAX_PENDING_AUDIO_FRAMES) {
-                val stale = pendingAudio.removeFirst()
-                recycleSampleBufferLocked(stale)
-                droppedAudioFrames++
-            }
-            pendingAudio.addLast(samples)
-            if (!drainScheduled) {
-                drainScheduled = true
-                shouldScheduleDrain = true
-            }
-        }
-
-        if (shouldScheduleDrain) {
-            runCatching { worker.execute { drainAudioQueue() } }
-                .onFailure { clearAudioQueue() }
-        }
     }
 
-    /**
-     * Drain all currently queued frames in one worker task. At most MAX_PENDING_AUDIO_FRAMES frames
-     * can exist, so decoder slowdown cannot create an unbounded Runnable/FloatArray backlog.
-     */
-    private fun drainAudioQueue() {
-        while (running.get()) {
-            val samples = synchronized(audioLock) {
-                if (pendingAudio.isEmpty()) {
-                    drainScheduled = false
-                    null
+    /** Flush the final sub-batch after AudioCapture has stopped. Runs on the recognizer worker. */
+    private fun drainRemainingPcm() {
+        while (true) {
+            val count = synchronized(audioLock) {
+                if (pcmSize <= 0) {
+                    0
                 } else {
-                    pendingAudio.removeFirst()
+                    val even = minOf(pcmSize, DECODE_BATCH_BYTES) and -2
+                    if (even > 0) {
+                        readPcmLocked(decodePcm, even)
+                        audioLock.notifyAll()
+                    }
+                    even
                 }
-            } ?: return
-
-            try {
-                acceptSamples(samples)
-            } finally {
-                synchronized(audioLock) { recycleSampleBufferLocked(samples) }
             }
-        }
-        clearAudioQueue()
-    }
-
-    private fun obtainSampleBuffer(size: Int): FloatArray = synchronized(audioLock) {
-        if (samplePool.isEmpty()) {
-            FloatArray(size)
-        } else {
-            val pooled = samplePool.removeFirst()
-            if (pooled.size == size) pooled else FloatArray(size)
-        }
-    }
-
-    private fun recycleSampleBufferLocked(samples: FloatArray) {
-        if (samplePool.size < MAX_SAMPLE_POOL_FRAMES) samplePool.addLast(samples)
-    }
-
-    private fun clearAudioQueue() {
-        synchronized(audioLock) {
-            while (pendingAudio.isNotEmpty()) recycleSampleBufferLocked(pendingAudio.removeFirst())
-            drainScheduled = false
+            if (count <= 0) return
+            val samples = if (count == DECODE_BATCH_BYTES) {
+                decodeSamples
+            } else {
+                FloatArray(count / 2)
+            }
+            convertPcm16ToFloat(decodePcm, samples, count)
+            acceptSamples(samples)
         }
     }
 
@@ -229,11 +285,12 @@ class LocalZipformerAsrEngine(
             onFinished()
             return
         }
-        // AudioCapture is stopped before finish(), so the single drain task ahead of this control task
-        // consumes every bounded pending frame first. There is no ever-growing queue to wait through.
         runCatching {
             worker.execute {
                 try {
+                    // Any full-batch drain task queued before this one runs first. Then preserve the
+                    // last partial batch here so stopping a class never clips the final words.
+                    drainRemainingPcm()
                     val rec = recognizer
                     val current = stream
                     if (rec != null && current != null) {
@@ -254,17 +311,27 @@ class LocalZipformerAsrEngine(
 
     override fun stop() {
         if (!running.getAndSet(false)) {
-            clearAudioQueue()
+            clearPcmRing()
             releaseNative()
             return
         }
-        clearAudioQueue()
+        synchronized(audioLock) { audioLock.notifyAll() }
         runCatching { worker.execute { releaseNative() } }
         worker.shutdown()
     }
 
+    private fun clearPcmRing() {
+        synchronized(audioLock) {
+            pcmRead = 0
+            pcmWrite = 0
+            pcmSize = 0
+            drainScheduled = false
+            audioLock.notifyAll()
+        }
+    }
+
     private fun releaseNative() {
-        clearAudioQueue()
+        clearPcmRing()
         runCatching { stream?.release() }
         stream = null
         runCatching { recognizer?.release() }
@@ -290,9 +357,14 @@ class LocalZipformerAsrEngine(
 
     companion object {
         private const val SAMPLE_RATE = 16_000
+        private const val BYTES_PER_SAMPLE = 2
         private const val MAX_HOTWORDS = 64
-        // AudioCapture emits ~60 ms frames: 8 frames = ~480 ms maximum queued audio.
-        private const val MAX_PENDING_AUDIO_FRAMES = 8
-        private const val MAX_SAMPLE_POOL_FRAMES = MAX_PENDING_AUDIO_FRAMES + 2
+        private const val CAPTURE_FRAME_MS = 60
+        private const val DECODE_BATCH_FRAMES = 4
+        private const val DECODE_BATCH_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * CAPTURE_FRAME_MS * DECODE_BATCH_FRAMES / 1000
+        // 180 s of 16 kHz mono PCM16 is ~5.5 MiB: fixed and tiny compared with the old unbounded heap growth.
+        private const val PCM_RING_SECONDS = 180
+        private const val PCM_RING_CAPACITY_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * PCM_RING_SECONDS
+        private const val RING_FULL_WAIT_MS = 20L
     }
 }

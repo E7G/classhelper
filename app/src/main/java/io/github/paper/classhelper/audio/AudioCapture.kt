@@ -18,9 +18,11 @@ class AudioCapture {
         if (!running.compareAndSet(false, true)) return
         val sampleRate = 16_000
         val min = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // Small ~60 ms PCM frames keep local streaming latency low without frequent large allocations.
+        // Keep 60 ms callback granularity for low-latency streaming. A larger AudioRecord backing
+        // buffer gives the ASR thread extra headroom during brief CPU stalls without allocating per frame.
         val chunkBytes = 1_920
-        val bufferBytes = maxOf(min * 2, chunkBytes * 4)
+        val fourSecondsBytes = sampleRate * 2 * 4
+        val bufferBytes = maxOf(min * 2, fourSecondsBytes)
         val audio = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             sampleRate,
