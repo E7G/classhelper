@@ -22,6 +22,44 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("llm_model", "gpt-4.1-mini")!!
         set(value) = prefs.edit().putString("llm_model", value.trim()).apply()
 
+    var chaoxingUsername: String
+        get() = prefs.getString("chaoxing_username", "")!!
+        set(value) = prefs.edit().putString("chaoxing_username", value.trim()).apply()
+
+    /** Encrypted at rest with AndroidKeyStore AES-GCM; never stored in plain SharedPreferences. */
+    var chaoxingPassword: String
+        get() = secrets.get("chaoxing_password")
+        set(value) = secrets.put("chaoxing_password", value)
+
+    /** Session cookie is encrypted at rest as well. */
+    var chaoxingCookie: String
+        get() = secrets.get("chaoxing_cookie")
+        set(value) = secrets.put("chaoxing_cookie", value.trim())
+
+    var chaoxingCourseId: String
+        get() = prefs.getString("chaoxing_course_id", "")!!
+        set(value) = prefs.edit().putString("chaoxing_course_id", value).apply()
+
+    var chaoxingClassId: String
+        get() = prefs.getString("chaoxing_class_id", "")!!
+        set(value) = prefs.edit().putString("chaoxing_class_id", value).apply()
+
+    var chaoxingCpi: String
+        get() = prefs.getString("chaoxing_cpi", "")!!
+        set(value) = prefs.edit().putString("chaoxing_cpi", value).apply()
+
+    var chaoxingCourseName: String
+        get() = prefs.getString("chaoxing_course_name", "")!!
+        set(value) = prefs.edit().putString("chaoxing_course_name", value).apply()
+
+    var chaoxingCourseDocumentId: String?
+        get() = prefs.getString("chaoxing_course_document_id", null)
+        set(value) = prefs.edit().putString("chaoxing_course_document_id", value).apply()
+
+    var chaoxingLastSync: Long
+        get() = prefs.getLong("chaoxing_last_sync", 0L)
+        set(value) = prefs.edit().putLong("chaoxing_last_sync", value).apply()
+
     var autoNotes: Boolean
         get() = prefs.getBoolean("auto_notes", true)
         set(value) = prefs.edit().putBoolean("auto_notes", value).apply()

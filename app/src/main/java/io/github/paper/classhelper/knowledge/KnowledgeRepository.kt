@@ -5,12 +5,8 @@ import io.github.paper.classhelper.data.CourseDb
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Lightweight on-device retrieval.
- *
- * SQLite FTS is fast for Latin/space-delimited text, while Chinese classroom
- * speech often has no token boundaries. A small character n-gram fallback is
- * therefore used for Chinese so PDF matching does not depend on an embedding
- * model staying resident in RAM.
+ * Lightweight on-device retrieval. The active PDF stays first; a bound Chaoxing course can be
+ * supplied as a second preferred document before the global library fallback.
  */
 class KnowledgeRepository(private val db: CourseDb) {
     data class ContextHit(val label: String, val page: Int?, val text: String)
@@ -26,11 +22,15 @@ class KnowledgeRepository(private val db: CourseDb) {
         documentCache.clear()
     }
 
-    fun retrieve(question: String, currentDocumentId: String?, currentPage: Int, maxChars: Int = 12_000): List<ContextHit> {
+    fun retrieve(
+        question: String,
+        currentDocumentId: String?,
+        currentPage: Int,
+        preferredDocumentId: String? = null,
+        maxChars: Int = 12_000,
+    ): List<ContextHit> {
         val out = LinkedHashMap<String, ContextHit>()
         if (currentDocumentId != null) {
-            // Current reading location is deliberately first: it is cheap and usually
-            // the most relevant classroom context even before lexical search succeeds.
             db.chunksNearPage(currentDocumentId, currentPage, 2).forEach { ch ->
                 out["${ch.documentId}:${ch.page}"] = ch.toHit()
             }
@@ -42,8 +42,19 @@ class KnowledgeRepository(private val db: CourseDb) {
             }
         }
 
-        // Search all imported materials too. FTS candidates are cheap; the n-gram
-        // fallback is capped so a large library cannot monopolize a question request.
+        if (preferredDocumentId != null && preferredDocumentId != currentDocumentId) {
+            hybridSearch(preferredDocumentId, question, 10).forEach { ch ->
+                out.putIfAbsent("${ch.documentId}:${ch.page}", ch.toHit())
+            }
+            // When the spoken question is too short for lexical ranking, still provide a small
+            // amount of the selected course so the LLM knows which course it is answering from.
+            if (out.values.none { it.label.startsWith("学习通 ·") }) {
+                db.allChunks(preferredDocumentId, 2).forEach { ch ->
+                    out.putIfAbsent("${ch.documentId}:${ch.page}", ch.toHit())
+                }
+            }
+        }
+
         db.searchChunks(null, question, 8).forEach { ch ->
             out.putIfAbsent("${ch.documentId}:${ch.page}", ch.toHit())
         }
@@ -68,7 +79,6 @@ class KnowledgeRepository(private val db: CourseDb) {
         val terms = lexicalTerms(speech)
         if (terms.size < 2) return null
         val scored = rankWithScore(cachedDocument(currentDocumentId), terms, 1).firstOrNull() ?: return null
-        // Conservative display threshold: this only suggests a page, it never forces navigation.
         if (scored.second < 0.20f) return null
         return PageMatch(scored.first.page, scored.first.title, scored.second)
     }
@@ -84,7 +94,6 @@ class KnowledgeRepository(private val db: CourseDb) {
         val cached = documentCache[documentId]
         if (!cached.isNullOrEmpty()) return cached
         val loaded = db.allChunks(documentId, 1_500)
-        // Do not cache empty results: indexing may still be running in the background.
         if (loaded.isNotEmpty()) documentCache[documentId] = loaded
         return loaded
     }
@@ -106,7 +115,6 @@ class KnowledgeRepository(private val db: CourseDb) {
 
     private fun lexicalTerms(raw: String): List<String> {
         var text = raw.lowercase().replace(Regex("\\s+"), "")
-        // Remove high-frequency classroom/question scaffolding before building Chinese n-grams.
         listOf(
             "为什么", "是什么", "怎么", "如何", "什么", "请问", "这个问题", "大家想一下", "谁来回答",
             "老师", "那么", "所以", "我们", "这里", "一下", "是不是", "有没有"
@@ -116,12 +124,15 @@ class KnowledgeRepository(private val db: CourseDb) {
         Regex("[a-z0-9][a-z0-9_+.#-]{1,}").findAll(raw.lowercase()).forEach { terms += it.value }
         val zhRuns = Regex("[\\p{IsHan}]{2,}").findAll(text).map { it.value }
         for (run in zhRuns) {
-            // Trigrams carry more precision; bigrams protect short technical terms.
             if (run.length >= 3) run.windowed(3).forEach { terms += it }
             run.windowed(2).forEach { terms += it }
         }
         return terms.take(36)
     }
 
-    private fun ChunkRow.toHit() = ContextHit("$title · P${page + 1}", page, text)
+    private fun ChunkRow.toHit(): ContextHit = if (documentId.startsWith("cx-")) {
+        ContextHit("学习通 · $title", null, text)
+    } else {
+        ContextHit("$title · P${page + 1}", page, text)
+    }
 }

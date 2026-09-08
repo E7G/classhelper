@@ -6,11 +6,13 @@ import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
 import io.github.paper.classhelper.ClassHelperApp
 import io.github.paper.classhelper.R
@@ -127,9 +129,26 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.settingsBackButton).setOnClickListener { finish() }
-        findViewById<Button>(R.id.openLibraryButton).setOnClickListener {
+        val libraryButton = findViewById<Button>(R.id.openLibraryButton)
+        libraryButton.setOnClickListener {
             startActivity(Intent(this, LibraryActivity::class.java))
         }
+        (libraryButton.parent as? LinearLayout)?.let { parent ->
+            val chaoxing = MaterialButton(this).apply {
+                text = "学习通课程资源"
+                minHeight = dp(50)
+                setOnClickListener { startActivity(Intent(this@SettingsActivity, ChaoxingActivity::class.java)) }
+            }
+            parent.addView(
+                chaoxing,
+                parent.indexOfChild(libraryButton),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)).apply {
+                    topMargin = dp(14)
+                    bottomMargin = dp(4)
+                },
+            )
+        }
+
         findViewById<Button>(R.id.saveSettingsButton).setOnClickListener {
             s.hotwords = hot.text.toString()
             s.llmBaseUrl = base.text.toString()
@@ -188,7 +207,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             is AsrModelManager.State.Ready -> {
                 val mb = state.totalBytes / 1024.0 / 1024.0
-                modelStatus.text = String.format(Locale.getDefault(), "已就绪 · %.1f MB · SenseVoiceSmall 本地识别，可直接开始听课", mb)
+                modelStatus.text = String.format(Locale.getDefault(), "已就绪 · %.1f MB · Zipformer 流式中文识别，可直接开始听课", mb)
                 modelProgress.visibility = View.GONE
                 modelProgress.isIndeterminate = false
                 modelAction.text = "已安装"
@@ -231,4 +250,5 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
 }

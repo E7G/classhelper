@@ -15,10 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Dedicated question lane. Retrieval and LLM work execute only on the scope supplied by
- * ClassroomService, so question answering can never run on the Zipformer recognizer thread.
- */
+/** Dedicated question lane; retrieval + LLM never execute on the Zipformer recognizer thread. */
 class QuestionPipeline(
     private val context: Context,
     private val scope: CoroutineScope
@@ -31,11 +28,17 @@ class QuestionPipeline(
         scope.launch {
             val settings = app.graph.settings
             val db = app.graph.db
-            val contextHits = app.graph.knowledge.retrieve(question, settings.currentDocumentId, settings.currentPage)
+            val contextHits = app.graph.knowledge.retrieve(
+                question = question,
+                currentDocumentId = settings.currentDocumentId,
+                currentPage = settings.currentPage,
+                preferredDocumentId = settings.chaoxingCourseDocumentId,
+            )
             val recentLecture = db.recentTranscripts(16, sessionId).joinToString("\n") { it.text }.takeLast(6_000)
             val evidence = contextHits.joinToString("\n\n") { "[${it.label}]\n${it.text}" }
             val prompt = buildString {
                 appendLine("老师刚刚提出的问题：$question")
+                if (settings.chaoxingCourseName.isNotBlank()) appendLine("当前绑定学习通课程：${settings.chaoxingCourseName}")
                 if (recentLecture.isNotBlank()) {
                     appendLine("\n最近课堂上下文：")
                     appendLine(recentLecture)
@@ -45,7 +48,7 @@ class QuestionPipeline(
                     appendLine(evidence)
                 }
                 appendLine("\n请给学生一个课堂快速参考答案。第一行先直接回答，随后最多用3个短要点解释。")
-                appendLine("课程资料足以支撑时优先依据资料；资料不足时明确写‘根据一般知识补充’。不要编造页码或资料出处。")
+                appendLine("课程资料足以支撑时优先依据当前学习通课程/PDF；资料不足时明确写‘根据一般知识补充’。不要编造页码或资料出处。")
             }
             if (seq == sequence.get()) {
                 ClassroomBus.update { it.copy(lastQuestion = question, answer = "", answerStreaming = true) }

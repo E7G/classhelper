@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 193
-        versionName = "1.9.3-async"
+        versionCode = 200
+        versionName = "1.10.0-chaoxing"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -110,8 +110,6 @@ android {
         resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
         jniLibs {
             useLegacyPackaging = false
-            // sherpa-onnx and onnxruntime-android both bundle libonnxruntime.so.
-            // Resolve the APK merge conflict deterministically instead of failing mergeNativeLibs.
             pickFirsts += setOf("**/libonnxruntime.so")
         }
     }
@@ -131,6 +129,7 @@ dependencies {
     implementation(files(sherpaAar))
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.18.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
