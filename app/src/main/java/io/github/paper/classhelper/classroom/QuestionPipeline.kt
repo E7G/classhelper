@@ -1,15 +1,7 @@
 package io.github.paper.classhelper.classroom
 
-import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import io.github.paper.classhelper.ClassHelperApp
-import io.github.paper.classhelper.R
 import io.github.paper.classhelper.llm.LlmClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,7 +70,6 @@ class QuestionPipeline(
                         historyVersion = state.historyVersion + 1
                     ) else state.copy(historyVersion = state.historyVersion + 1)
                 }
-                if (settings.showAnswerNotification && answer.isNotBlank()) showAnswerNotification(question, answer, seq)
             } catch (t: Throwable) {
                 val error = "回答失败：${t.message ?: "unknown"}"
                 db.addQuestion(question, error, sessionId, contextHits.joinToString(" | ") { it.label })
@@ -92,24 +83,4 @@ class QuestionPipeline(
         }
     }
 
-    private fun showAnswerNotification(question: String, answer: String, seq: Long) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) return
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(ANSWER_CHANNEL, "课堂答案", NotificationManager.IMPORTANCE_HIGH))
-        manager.notify(
-            200 + (seq % 50).toInt(),
-            NotificationCompat.Builder(context, ANSWER_CHANNEL)
-                .setSmallIcon(R.drawable.ic_stat_class)
-                .setContentTitle(question.take(80))
-                .setContentText(answer.replace('\n', ' ').take(160))
-                .setStyle(NotificationCompat.BigTextStyle().bigText(answer.take(1500)))
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .build()
-        )
-    }
-
-    companion object { const val ANSWER_CHANNEL = "classhelper_answers" }
 }

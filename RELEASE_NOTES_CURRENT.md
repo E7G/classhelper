@@ -1,10 +1,5 @@
-- 修复多处 256 MiB Android Java heap 下的 OOM：崩溃栈可能落在 Binder/触摸分发，但根因是应用整体堆已耗尽。
-- PDF 文本索引改为 PDFBox 临时文件 scratch 模式，不再使用默认 setupMainMemoryOnly 把 PDF 解析缓存大量压进 Java heap。
-- 已索引 PDF 的存在性检查由最多读取 10,000 个完整文本块改为只读取 1 个，避免每次重新打开资料都制造几十 MB 的无意义瞬时对象。
-- OCR 改为按设备 memoryClass 限制单页渲染像素；256 MiB 设备单张 ARGB Bitmap 控制在约 18 MiB，并且逐页消费识别结果，不再额外保留整份 OCR 结果 Map。
-- 知识库检索移除最多 1,500 个全文块的常驻文档缓存；中文 fallback 改为 SQLite 限量 LIKE 候选后在内存排序，全局 fallback 也限制候选数量。
-- 学习通课程同步改为 SQLite staging 分批落库，不再把整门课、章节和数百页 PDF 文本全部堆在 MutableList<ChunkRow> 中；完成后原子替换旧索引。
-- 学习通 PDF 文本提取同样使用 PDFBox 临时文件 scratch 模式，课件文件继续流式落盘，不整包进入 Java heap。
-- application 启用 largeHeap 作为 PDFView + 本地 Zipformer + OCR/PDFBox 同时工作的最后安全余量；主要内存峰值仍已从代码路径上收紧，不依赖 largeHeap 掩盖无限增长。
-- 保留 1.9.2 的无丢帧 PCM16 环形缓冲；按用户反馈已撤销 1.9.3 的多线程池异步拆分，问题回答/自动笔记恢复较简单的原调度方式。
-- 保留 1.10.0 的学习通账号密码登录、AndroidKeyStore 加密保存密码/Cookie、课程选择同步和当前课程优先检索。
+- 修复首页仍显示 SenseVoiceSmall 的旧文案；实际语音识别引擎一直是 Zipformer Streaming INT8，本版首页与设置页统一显示真实模型。
+- 清理设置页残留的 SenseVoice 多语言/不支持热词描述，改为 Zipformer 中文实时识别、partial、endpoint 与热词偏置说明。
+- 按用户要求移除老师问题/LLM 答案的系统通知：问题与答案只在应用内课堂助手和历史记录中显示，不再创建高优先级答案通知。
+- 持续听课所需的前台服务常驻通知仍保留，避免 Android 后台限制中断录音。
+- 保留 1.10.1 的低内存 PDF/OCR/知识库修复、1.9.2 无丢帧 PCM 环形缓冲和学习通课程资源功能。

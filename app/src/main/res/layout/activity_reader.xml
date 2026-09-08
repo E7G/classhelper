@@ -114,7 +114,7 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="3dp"
-                                android:text="SenseVoiceSmall INT8 · 轻量多语言"
+                                android:text="Zipformer Streaming INT8 · 中文实时识别"
                                 android:textColor="?attr/colorOnPrimaryContainer"
                                 android:alpha="0.78"
                                 android:textSize="12sp" />

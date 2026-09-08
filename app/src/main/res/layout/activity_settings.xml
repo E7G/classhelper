@@ -117,7 +117,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="5dp"
-                        android:text="SenseVoiceSmall INT8 · 中英日韩粤"
+                        android:text="Zipformer Streaming INT8 · 中文实时识别"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:alpha="0.82"
                         android:textSize="13sp" />
@@ -174,7 +174,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:lineSpacingExtra="2dp"
-                        android:text="约 230 MB。下载完成后全部在设备本地识别，课堂音频不需要上传到 ASR 服务。支持普通话、粤语、英语、日语和韩语。"
+                        android:text="约 165 MB。下载完成后全部在设备本地流式识别，课堂音频不需要上传到 ASR 服务。面向中文课堂，支持实时 partial、endpoint 与热词偏置。"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:alpha="0.72"
                         android:textSize="11sp" />
@@ -183,7 +183,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="18dp"
-                        android:text="课程术语 / 专业词（当前 SenseVoice 不做热词偏置）"
+                        android:text="课程术语 / 专业词（Zipformer 支持热词偏置）"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:textSize="12sp"
                         android:textStyle="bold" />
@@ -610,14 +610,6 @@
                         android:layout_height="wrap_content"
                         android:minHeight="52dp"
                         android:text="扫描型 PDF 自动本地 OCR"
-                        android:textColor="?attr/colorOnSecondaryContainer" />
-
-                    <com.google.android.material.checkbox.MaterialCheckBox
-                        android:id="@+id/showAnswerNotificationCheck"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:minHeight="52dp"
-                        android:text="后台识别到提问时显示答案通知"
                         android:textColor="?attr/colorOnSecondaryContainer" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>

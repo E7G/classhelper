@@ -52,7 +52,6 @@ class SettingsActivity : AppCompatActivity() {
         val auto = findViewById<CheckBox>(R.id.autoNotesCheck)
         val ocr = findViewById<CheckBox>(R.id.autoOcrCheck)
         val ocrHigh = findViewById<MaterialSwitch>(R.id.ocrHighAccuracyCheck)
-        val notify = findViewById<CheckBox>(R.id.showAnswerNotificationCheck)
 
         modelStatus = findViewById(R.id.asrModelStatusText)
         modelProgress = findViewById(R.id.asrModelProgress)
@@ -71,7 +70,6 @@ class SettingsActivity : AppCompatActivity() {
         auto.isChecked = s.autoNotes
         ocr.isChecked = s.autoOcr
         ocrHigh.isChecked = s.ocrHighAccuracy
-        notify.isChecked = s.showAnswerNotification
 
         modelAction.setOnClickListener {
             when (app.graph.asrModels.currentState()) {
@@ -157,7 +155,6 @@ class SettingsActivity : AppCompatActivity() {
             s.autoNotes = auto.isChecked
             s.autoOcr = ocr.isChecked
             s.ocrHighAccuracy = ocrHigh.isChecked
-            s.showAnswerNotification = notify.isChecked
             Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
             finish()
         }
