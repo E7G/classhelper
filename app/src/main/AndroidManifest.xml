@@ -12,6 +12,7 @@
     <application
         android:name=".ClassHelperApp"
         android:allowBackup="false"
+        android:largeHeap="true"
         android:usesCleartextTraffic="true"
         android:label="课堂助手"
         android:supportsRtl="true"

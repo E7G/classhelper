@@ -1,5 +1,6 @@
 package io.github.paper.classhelper.knowledge
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -9,6 +10,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import io.github.paper.classhelper.SettingsStore
@@ -24,7 +26,10 @@ import kotlin.math.sqrt
 
 /**
  * Text-layer first. Image-only pages use PP-OCRv6 when installed, and ML Kit remains a fail-safe.
- * Explicit force OCR means all pages are rendered/recognized; normal indexing OCRs only sparse pages.
+ *
+ * PDF parsing is explicitly scratch-file backed. PDFView, Zipformer and PDFBox can otherwise be
+ * resident at the same time and the default PDFBox main-memory scratch mode can exhaust a 256 MiB
+ * Android heap even though the PDF itself lives on disk.
  */
 class PdfTextIndexer(
     private val context: Context,
@@ -39,27 +44,38 @@ class PdfTextIndexer(
     ): Int {
         val row = db.getDocument(workspace.id)
         if (!force && (row?.indexedAt ?: 0L) > 0L) {
-            val existing = db.allChunks(workspace.id, 10_000)
-            if (existing.isNotEmpty()) return existing.size
+            // The old check loaded up to 10,000 full text chunks just to test existence.
+            if (db.allChunks(workspace.id, 1).isNotEmpty()) return 1
         }
 
         val chunks = mutableListOf<ChunkRow>()
         val ocrPages = mutableListOf<Int>()
-        PDDocument.load(workspace.workingFile).use { doc ->
+        PDDocument.load(
+            workspace.workingFile,
+            "",
+            MemoryUsageSetting.setupTempFileOnly(),
+        ).use { doc ->
             val stripper = PDFTextStripper()
             for (page in 0 until doc.numberOfPages) {
-                stripper.startPage = page + 1; stripper.endPage = page + 1
+                stripper.startPage = page + 1
+                stripper.endPage = page + 1
                 val text = runCatching { stripper.getText(doc).trim() }.getOrDefault("")
                 if (force || text.replace(Regex("\\s+"), "").length < MIN_TEXT_CHARS) ocrPages += page
-                chunks += ChunkRow(workspace.id, page, "${workspace.title} · P${page + 1}", text.take(MAX_PAGE_CHARS))
+                chunks += ChunkRow(
+                    workspace.id,
+                    page,
+                    "${workspace.title} · P${page + 1}",
+                    text.take(MAX_PAGE_CHARS),
+                )
                 onProgress(page + 1, doc.numberOfPages, "提取 PDF 文本")
             }
         }
 
         if ((settings.autoOcr || force) && ocrPages.isNotEmpty()) {
-            val recognized = ocrPages(workspace, ocrPages, force, onProgress)
-            for ((page, text) in recognized) if (text.isNotBlank() && page in chunks.indices) {
-                chunks[page] = chunks[page].copy(text = text.trim().take(MAX_PAGE_CHARS))
+            ocrPages(workspace, ocrPages, force, onProgress) { page, text ->
+                if (text.isNotBlank() && page in chunks.indices) {
+                    chunks[page] = chunks[page].copy(text = text.trim().take(MAX_PAGE_CHARS))
+                }
             }
         }
         db.replaceChunks(workspace.id, chunks)
@@ -70,9 +86,9 @@ class PdfTextIndexer(
         workspace: PdfWorkspaceManager.Workspace,
         pages: List<Int>,
         force: Boolean,
-        onProgress: (Int, Int, String) -> Unit
-    ): Map<Int, String> {
-        val out = linkedMapOf<Int, String>()
+        onProgress: (Int, Int, String) -> Unit,
+        onRecognized: (Int, String) -> Unit,
+    ) {
         val pfd = ParcelFileDescriptor.open(workspace.workingFile, ParcelFileDescriptor.MODE_READ_ONLY)
         val mlKit = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
         val rapid = ocrModels?.modelDirectory()?.let { dir -> runCatching { PpOcrV6Engine(dir) }.getOrNull() }
@@ -100,19 +116,27 @@ class PdfTextIndexer(
                             val rapidText = if (rapid != null) runCatching {
                                 rapid.recognize(bitmap, settings.ocrHighAccuracy || force).text
                             }.getOrDefault("") else ""
-                            if (rapidText.isNotBlank()) out[pageIndex] = rapidText
-                            else {
-                                if (rapid != null) onProgress(index + 1, pages.size, "PP-OCRv6 未得到有效文字，自动兼容识别 P${pageIndex + 1}")
-                                out[pageIndex] = recognizeMlKit(mlKit, bitmap)
+                            val recognized = if (rapidText.isNotBlank()) {
+                                rapidText
+                            } else {
+                                if (rapid != null) {
+                                    onProgress(index + 1, pages.size, "PP-OCRv6 未得到有效文字，自动兼容识别 P${pageIndex + 1}")
+                                }
+                                recognizeMlKit(mlKit, bitmap)
                             }
-                        } finally { bitmap.recycle() }
+                            // Consume one page immediately; do not retain a second map of all OCR text.
+                            onRecognized(pageIndex, recognized)
+                        } finally {
+                            bitmap.recycle()
+                        }
                     }
                 }
             }
         } finally {
-            rapid?.close(); mlKit.close(); pfd.close()
+            rapid?.close()
+            mlKit.close()
+            pfd.close()
         }
-        return out
     }
 
     private fun renderScale(width: Int, height: Int, targetLongEdge: Int): Float {
@@ -120,8 +144,18 @@ class PdfTextIndexer(
         var scale = targetLongEdge.toFloat() / maxSide
         scale = scale.coerceIn(1f, 4f)
         val pixels = width.toDouble() * height.toDouble() * scale * scale
-        if (pixels > MAX_RENDER_PIXELS) scale *= sqrt(MAX_RENDER_PIXELS / pixels).toFloat()
+        val budget = renderPixelBudget()
+        if (pixels > budget) scale *= sqrt(budget / pixels).toFloat()
         return scale.coerceAtLeast(1f)
+    }
+
+    private fun renderPixelBudget(): Double {
+        val memoryClass = context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 256
+        return when {
+            memoryClass <= 256 -> 4_500_000.0 // ~18 MiB ARGB bitmap
+            memoryClass <= 384 -> 6_000_000.0 // ~24 MiB
+            else -> 8_000_000.0              // ~32 MiB
+        }
     }
 
     private suspend fun recognizeMlKit(recognizer: TextRecognizer, bitmap: Bitmap): String = suspendCancellableCoroutine { cont ->
@@ -132,11 +166,10 @@ class PdfTextIndexer(
 
     companion object {
         private const val MIN_TEXT_CHARS = 20
-        private const val MAX_PAGE_CHARS = 30_000
-        private const val MLKIT_LONG_EDGE = 1600
-        private const val MLKIT_LONG_EDGE_HIGH = 2200
-        private const val RAPID_LONG_EDGE = 2400
-        private const val RAPID_LONG_EDGE_HIGH = 3000
-        private const val MAX_RENDER_PIXELS = 12_000_000.0
+        private const val MAX_PAGE_CHARS = 16_000
+        private const val MLKIT_LONG_EDGE = 1500
+        private const val MLKIT_LONG_EDGE_HIGH = 1900
+        private const val RAPID_LONG_EDGE = 2000
+        private const val RAPID_LONG_EDGE_HIGH = 2400
     }
 }

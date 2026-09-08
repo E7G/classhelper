@@ -1,6 +1,7 @@
 package io.github.paper.classhelper.chaoxing
 
 import android.content.Context
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import io.github.paper.classhelper.SettingsStore
@@ -20,8 +21,11 @@ import org.jsoup.Jsoup
 
 /**
  * Imports one authorized Chaoxing course into ClassHelper's local retrieval database.
- * Chapter/card text and readable PDF courseware become searchable chunks. Media is represented by
- * metadata + its normal authorized URL instead of being buffered in the app heap.
+ *
+ * Indexing is staged directly in SQLite in small batches. Older code retained the entire course
+ * (including hundreds of extracted PDF pages) as ChunkRow/String objects until sync finished,
+ * creating a large Java-heap spike. The staging document keeps memory bounded and the previously
+ * synced course remains intact until the final atomic promotion.
  */
 class ChaoxingResourceSync(
     context: Context,
@@ -45,11 +49,41 @@ class ChaoxingResourceSync(
         require(chapters.isNotEmpty()) { "没有读取到课程章节；可能课程尚未开放" }
 
         val documentId = courseDocumentId(course)
-        val chunks = mutableListOf<ChunkRow>()
+        val stagingId = "$documentId:sync"
+        val pending = ArrayList<ChunkRow>(CHUNK_BATCH_SIZE)
         var chunkIndex = 0
         var resourceCount = 0
         var pdfPages = 0
         var skippedLarge = 0
+
+        val database = db.writableDatabase
+        database.delete("document_chunks", "document_id=?", arrayOf(stagingId))
+
+        fun flushPending() {
+            if (pending.isEmpty()) return
+            database.beginTransaction()
+            try {
+                val stmt = database.compileStatement(
+                    "INSERT INTO document_chunks(document_id,page,title,text) VALUES(?,?,?,?)"
+                )
+                try {
+                    pending.forEach { ch ->
+                        stmt.clearBindings()
+                        stmt.bindString(1, ch.documentId)
+                        stmt.bindLong(2, ch.page.toLong())
+                        stmt.bindString(3, ch.title)
+                        stmt.bindString(4, ch.text)
+                        stmt.executeInsert()
+                    }
+                } finally {
+                    stmt.close()
+                }
+                database.setTransactionSuccessful()
+            } finally {
+                database.endTransaction()
+            }
+            pending.clear()
+        }
 
         fun addChunk(title: String, rawText: String) {
             val clean = rawText.replace(Regex("[\\t\\r ]+"), " ")
@@ -57,97 +91,119 @@ class ChaoxingResourceSync(
             if (clean.length < 2) return
             clean.chunked(MAX_CHUNK_CHARS).forEachIndexed { part, text ->
                 val suffix = if (part == 0) "" else " · ${part + 1}"
-                chunks += ChunkRow(documentId, chunkIndex++, title + suffix, text)
+                pending += ChunkRow(stagingId, chunkIndex++, title + suffix, text)
+                if (pending.size >= CHUNK_BATCH_SIZE) flushPending()
             }
         }
 
-        chapters.forEachIndexed { chapterIndex, chapter ->
-            onProgress("${chapterIndex + 1}/${chapters.size} · ${chapter.title}")
-            val chapterText = StringBuilder()
-            chapterText.appendLine("课程：${course.name}")
-            if (course.teacher.isNotBlank()) chapterText.appendLine("教师：${course.teacher}")
-            chapterText.appendLine("章节：${chapter.title}")
+        try {
+            chapters.forEachIndexed { chapterIndex, chapter ->
+                onProgress("${chapterIndex + 1}/${chapters.size} · ${chapter.title}")
+                val chapterText = StringBuilder()
+                chapterText.appendLine("课程：${course.name}")
+                if (course.teacher.isNotBlank()) chapterText.appendLine("教师：${course.teacher}")
+                chapterText.appendLine("章节：${chapter.title}")
 
-            val count = runCatching { client.cardCount(course, chapter) }.getOrDefault(0)
-            for (cardIndex in 0 until count) {
-                val card = runCatching { client.loadCard(course, chapter, cardIndex) }.getOrNull() ?: continue
-                val inline = extractReadableText(card)
-                if (inline.isNotBlank()) {
-                    chapterText.appendLine()
-                    chapterText.appendLine("[章节内容 ${cardIndex + 1}]")
-                    chapterText.appendLine(inline)
-                }
-
-                val attachments = card.optJSONArray("attachments") ?: JSONArray()
-                for (i in 0 until attachments.length()) {
-                    val attachment = attachments.optJSONObject(i) ?: continue
-                    val property = attachment.optJSONObject("property") ?: JSONObject()
-                    val type = attachment.optString("type").ifBlank {
-                        if (property.optString("bookname").isNotBlank()) "book" else "resource"
+                val count = runCatching { client.cardCount(course, chapter) }.getOrDefault(0)
+                for (cardIndex in 0 until count) {
+                    val card = runCatching { client.loadCard(course, chapter, cardIndex) }.getOrNull() ?: continue
+                    val inline = extractReadableText(card)
+                    if (inline.isNotBlank()) {
+                        chapterText.appendLine()
+                        chapterText.appendLine("[章节内容 ${cardIndex + 1}]")
+                        chapterText.appendLine(inline)
                     }
-                    val name = property.optString("name").ifBlank { property.optString("bookname") }
-                        .ifBlank { "$type ${i + 1}" }
-                    val objectId = property.optString("objectid").takeIf { it.isNotBlank() }
-                    resourceCount++
 
-                    val resolved = objectId?.let { runCatching { client.resolveResource(it) }.getOrNull() }
-                    chapterText.appendLine()
-                    chapterText.appendLine("[资源] $name · $type")
-                    property.optString("description").takeIf { it.isNotBlank() }?.let {
-                        chapterText.appendLine(cleanHtml(it))
-                    }
-                    resolved?.sourceUrl?.let { chapterText.appendLine("资源地址：$it") }
-
-                    val pdfUrl = resolved?.pdfUrl
-                    if (pdfUrl != null && objectId != null) {
-                        val temp = File(appContext.cacheDir, "chaoxing/${safeName(objectId)}.pdf")
-                        temp.parentFile?.mkdirs()
-                        onProgress("${chapterIndex + 1}/${chapters.size} · 读取课件：$name")
-                        if (downloadTo(pdfUrl, temp, MAX_PDF_BYTES)) {
-                            pdfPages += extractPdf(temp, "$name · ${chapter.title}", ::addChunk)
-                        } else {
-                            skippedLarge++
-                            chapterText.appendLine("课件过大或下载失败，已保留在线资源地址。")
+                    val attachments = card.optJSONArray("attachments") ?: JSONArray()
+                    for (i in 0 until attachments.length()) {
+                        val attachment = attachments.optJSONObject(i) ?: continue
+                        val property = attachment.optJSONObject("property") ?: JSONObject()
+                        val type = attachment.optString("type").ifBlank {
+                            if (property.optString("bookname").isNotBlank()) "book" else "resource"
                         }
-                        temp.delete()
+                        val name = property.optString("name").ifBlank { property.optString("bookname") }
+                            .ifBlank { "$type ${i + 1}" }
+                        val objectId = property.optString("objectid").takeIf { it.isNotBlank() }
+                        resourceCount++
+
+                        val resolved = objectId?.let { runCatching { client.resolveResource(it) }.getOrNull() }
+                        chapterText.appendLine()
+                        chapterText.appendLine("[资源] $name · $type")
+                        property.optString("description").takeIf { it.isNotBlank() }?.let {
+                            chapterText.appendLine(cleanHtml(it))
+                        }
+                        resolved?.sourceUrl?.let { chapterText.appendLine("资源地址：$it") }
+
+                        val pdfUrl = resolved?.pdfUrl
+                        if (pdfUrl != null && objectId != null) {
+                            val temp = File(appContext.cacheDir, "chaoxing/${safeName(objectId)}.pdf")
+                            temp.parentFile?.mkdirs()
+                            onProgress("${chapterIndex + 1}/${chapters.size} · 读取课件：$name")
+                            if (downloadTo(pdfUrl, temp, MAX_PDF_BYTES)) {
+                                pdfPages += extractPdf(temp, "$name · ${chapter.title}", ::addChunk)
+                            } else {
+                                skippedLarge++
+                                chapterText.appendLine("课件过大或下载失败，已保留在线资源地址。")
+                            }
+                            temp.delete()
+                        }
                     }
                 }
+                addChunk("${course.name} · ${chapter.title}", chapterText.toString())
             }
-            addChunk("${course.name} · ${chapter.title}", chapterText.toString())
-        }
+            flushPending()
 
-        val source = buildString {
-            append("chaoxing://course/").append(course.courseId)
-            append("?clazzId=").append(course.classId)
-            if (course.cpi.isNotBlank()) append("&cpi=").append(course.cpi)
-        }
-        db.upsertDocument(
-            DocumentRow(
-                id = documentId,
-                sourceUri = source,
-                workingPath = "",
-                title = "学习通 · ${course.name}",
-                dirty = false,
-                kind = "chaoxing",
-                indexedAt = System.currentTimeMillis(),
+            // Promote the completed staging index in one small SQLite transaction. No course text
+            // is materialized back into Java while swapping the old and new index.
+            database.beginTransaction()
+            try {
+                database.delete("document_chunks", "document_id=?", arrayOf(documentId))
+                database.execSQL(
+                    "INSERT INTO document_chunks(document_id,page,title,text) " +
+                        "SELECT ?,page,title,text FROM document_chunks WHERE document_id=? ORDER BY page",
+                    arrayOf(documentId, stagingId),
+                )
+                database.delete("document_chunks", "document_id=?", arrayOf(stagingId))
+                database.setTransactionSuccessful()
+            } finally {
+                database.endTransaction()
+            }
+
+            val source = buildString {
+                append("chaoxing://course/").append(course.courseId)
+                append("?clazzId=").append(course.classId)
+                if (course.cpi.isNotBlank()) append("&cpi=").append(course.cpi)
+            }
+            db.upsertDocument(
+                DocumentRow(
+                    id = documentId,
+                    sourceUri = source,
+                    workingPath = "",
+                    title = "学习通 · ${course.name}",
+                    dirty = false,
+                    kind = "chaoxing",
+                    indexedAt = System.currentTimeMillis(),
+                )
             )
-        )
-        db.replaceChunks(documentId, chunks)
-        settings.chaoxingCourseId = course.courseId
-        settings.chaoxingClassId = course.classId
-        settings.chaoxingCpi = course.cpi
-        settings.chaoxingCourseName = course.name
-        settings.chaoxingCourseDocumentId = documentId
-        settings.chaoxingLastSync = System.currentTimeMillis()
+            settings.chaoxingCourseId = course.courseId
+            settings.chaoxingClassId = course.classId
+            settings.chaoxingCpi = course.cpi
+            settings.chaoxingCourseName = course.name
+            settings.chaoxingCourseDocumentId = documentId
+            settings.chaoxingLastSync = System.currentTimeMillis()
 
-        ChaoxingSyncResult(
-            documentId = documentId,
-            chapters = chapters.size,
-            resources = resourceCount,
-            indexedChunks = chunks.size,
-            extractedPdfPages = pdfPages,
-            skippedLargeFiles = skippedLarge,
-        )
+            ChaoxingSyncResult(
+                documentId = documentId,
+                chapters = chapters.size,
+                resources = resourceCount,
+                indexedChunks = chunkIndex,
+                extractedPdfPages = pdfPages,
+                skippedLargeFiles = skippedLarge,
+            )
+        } finally {
+            pending.clear()
+            database.delete("document_chunks", "document_id=?", arrayOf(stagingId))
+        }
     }
 
     private fun downloadTo(url: String, file: File, maxBytes: Long): Boolean {
@@ -193,14 +249,16 @@ class ChaoxingResourceSync(
     private fun extractPdf(file: File, title: String, add: (String, String) -> Unit): Int {
         return runCatching {
             var pages = 0
-            PDDocument.load(file).use { document ->
+            PDDocument.load(file, "", MemoryUsageSetting.setupTempFileOnly()).use { document ->
                 val stripper = PDFTextStripper()
                 val count = minOf(document.numberOfPages, MAX_PDF_PAGES)
                 for (page in 0 until count) {
                     stripper.startPage = page + 1
                     stripper.endPage = page + 1
                     val text = stripper.getText(document).trim()
-                    if (text.length >= MIN_PDF_TEXT_CHARS) add("$title · P${page + 1}", text.take(MAX_PDF_PAGE_CHARS))
+                    if (text.length >= MIN_PDF_TEXT_CHARS) {
+                        add("$title · P${page + 1}", text.take(MAX_PDF_PAGE_CHARS))
+                    }
                     pages++
                 }
             }
@@ -257,10 +315,11 @@ class ChaoxingResourceSync(
 
     companion object {
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/152.0 Mobile Safari/537.36 ClassHelper/1.0"
-        private const val MAX_CHUNK_CHARS = 24_000
-        private const val MAX_CARD_TEXT_CHARS = 24_000
-        private const val MAX_SINGLE_FIELD_CHARS = 12_000
-        private const val MAX_PDF_PAGE_CHARS = 30_000
+        private const val CHUNK_BATCH_SIZE = 24
+        private const val MAX_CHUNK_CHARS = 16_000
+        private const val MAX_CARD_TEXT_CHARS = 18_000
+        private const val MAX_SINGLE_FIELD_CHARS = 10_000
+        private const val MAX_PDF_PAGE_CHARS = 16_000
         private const val MIN_PDF_TEXT_CHARS = 12
         private const val MAX_PDF_PAGES = 600
         private const val MAX_PDF_BYTES = 80L * 1024L * 1024L
