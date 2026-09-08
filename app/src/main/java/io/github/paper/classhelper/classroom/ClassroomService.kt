@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import io.github.paper.classhelper.ClassHelperApp
@@ -20,54 +19,19 @@ import io.github.paper.classhelper.ui.ReaderActivity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/**
- * Foreground classroom recorder.
- *
- * The ASR callback path is intentionally tiny: callbacks only snapshot state and enqueue work.
- * Database writes, question detection/LLM, auto notes, and PDF matching run on independent async
- * lanes so none of them can pause the Zipformer decoder or microphone capture.
- */
 class ClassroomService : Service(), StreamingAsrEngine.Listener {
-    private val rootJob = SupervisorJob()
-
-    private val eventExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "ClassHelper-ASR-Events").apply { priority = Thread.NORM_PRIORITY - 1 }
-    }
-    private val questionExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "ClassHelper-Questions").apply { priority = Thread.NORM_PRIORITY - 2 }
-    }
-    private val noteExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "ClassHelper-AutoNotes").apply { priority = Thread.NORM_PRIORITY - 2 }
-    }
-
-    private val eventDispatcher = eventExecutor.asCoroutineDispatcher()
-    private val questionDispatcher = questionExecutor.asCoroutineDispatcher()
-    private val noteDispatcher = noteExecutor.asCoroutineDispatcher()
-
-    /** Ordered lane for transcript persistence + detector state. Never runs on the ASR worker. */
-    private val asrEventScope = CoroutineScope(SupervisorJob(rootJob) + eventDispatcher)
-    /** Dedicated serial lane for retrieval + LLM answering. */
-    private val questionScope = CoroutineScope(SupervisorJob(rootJob) + questionDispatcher)
-    /** Dedicated serial lane for automatic note generation. */
-    private val noteScope = CoroutineScope(SupervisorJob(rootJob) + noteDispatcher)
-    /** Miscellaneous work such as PDF page matching and stop timers. */
-    private val backgroundScope = CoroutineScope(SupervisorJob(rootJob) + Dispatchers.Default)
-    /** UI/notification updates are posted off the ASR callback thread as well. */
-    private val uiScope = CoroutineScope(SupervisorJob(rootJob) + Dispatchers.Main.immediate)
-
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var app: ClassHelperApp
     private lateinit var asr: StreamingAsrEngine
     private lateinit var audio: AudioCapture
@@ -78,15 +42,15 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     @Volatile private var stopping = false
     private val finishSequenceStarted = AtomicBoolean(false)
     private var sessionId: String? = null
-    @Volatile private var partialQuestionJob: Job? = null
+    private var partialQuestionJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         app = application as ClassHelperApp
         asr = LocalZipformerAsrEngine(app.graph.asrModels) { buildAsrHotwords() }
         audio = AudioCapture()
-        questions = QuestionPipeline(this, questionScope)
-        notes = AutoNotePipeline(app, noteScope)
+        questions = QuestionPipeline(this, scope)
+        notes = AutoNotePipeline(app, scope)
         createChannel()
     }
 
@@ -123,87 +87,46 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         audio.start(onChunk = { asr.sendPcm16(it) }, onError = { onError("录音失败：${it.message}", it) })
     }
 
-    /** ASR worker only posts the UI state and immediately returns. */
     override fun onState(state: String) {
         if (stopping) return
-        uiScope.launch {
-            if (stopping) return@launch
-            ClassroomBus.update { it.copy(status = state, listening = true, stopping = false, sessionId = sessionId) }
-            updateNotification(state)
-        }
+        ClassroomBus.update { it.copy(status = state, listening = true, stopping = false, sessionId = sessionId) }
+        updateNotification(state)
     }
 
-    /**
-     * Partial text never performs question detection on the recognizer thread. Only the latest
-     * partial is debounced on the ordered event lane; answering itself is sent to questionScope.
-     */
     override fun onPartial(text: String) {
-        val snapshot = text
-        val sid = sessionId
-        uiScope.launch { ClassroomBus.update { it.copy(partial = snapshot) } }
-
+        ClassroomBus.update { it.copy(partial = text) }
         partialQuestionJob?.cancel()
-        if (snapshot.length >= 6) {
-            partialQuestionJob = asrEventScope.launch {
+        if (text.length >= 6) {
+            partialQuestionJob = scope.launch {
                 delay(650)
-                detector.acceptPartial(snapshot)?.let { questions.answer(it, sid) }
+                detector.acceptPartial(text)?.let { questions.answer(it, sessionId) }
             }
         }
     }
 
-    /**
-     * Final ASR callbacks are enqueue-only. All persistence and downstream intelligence is async,
-     * so a slow database, retrieval, network request, LLM stream, or note job cannot stop Zipformer.
-     */
     override fun onFinal(text: String) {
+        partialQuestionJob?.cancel()
         val clean = text.trim()
         if (clean.isBlank()) return
-
-        partialQuestionJob?.cancel()
-        val sid = sessionId
         val docId = app.graph.settings.currentDocumentId
         val page = app.graph.settings.currentPage
+        app.graph.db.addTranscript(clean, sessionId, docId, page)
+        ClassroomBus.update { it.copy(partial = "", historyVersion = it.historyVersion + 1) }
+        notes.onFinalTranscript(sessionId)
+        detector.accept(clean)?.let { questions.answer(it, sessionId) }
 
-        uiScope.launch { ClassroomBus.update { it.copy(partial = "") } }
-        asrEventScope.launch {
-            try {
-                app.graph.db.addTranscript(clean, sid, docId, page)
-                uiScope.launch { ClassroomBus.update { it.copy(historyVersion = it.historyVersion + 1) } }
-
-                // These methods only enqueue into their own independent lanes.
-                notes.onFinalTranscript(sid)
-                detector.accept(clean)?.let { questions.answer(it, sid) }
-
-                if (docId != null && clean.length >= 6) {
-                    backgroundScope.launch {
-                        runCatching { app.graph.knowledge.matchPage(clean, docId) }
-                            .onSuccess { match ->
-                                if (match != null) {
-                                    uiScope.launch {
-                                        ClassroomBus.update { state ->
-                                            state.copy(matchedPage = match.page, matchedLabel = match.label)
-                                        }
-                                    }
-                                }
-                            }
-                            .onFailure { Log.w(TAG, "PDF page match failed", it) }
-                    }
+        if (docId != null && clean.length >= 6) {
+            scope.launch(Dispatchers.Default) {
+                app.graph.knowledge.matchPage(clean, docId)?.let { match ->
+                    ClassroomBus.update { state -> state.copy(matchedPage = match.page, matchedLabel = match.label) }
                 }
-            } catch (t: Throwable) {
-                // A business-layer failure is logged only; ASR keeps running and is not put into an
-                // error/stopped state because recognition itself is still healthy.
-                Log.e(TAG, "Async transcript processing failed", t)
             }
         }
     }
 
-    /** Recognition errors are reported asynchronously; this callback never blocks the ASR worker. */
     override fun onError(message: String, cause: Throwable?) {
-        if (cause != null) Log.e(TAG, message, cause) else Log.e(TAG, message)
-        uiScope.launch {
-            ClassroomBus.update { it.copy(status = message) }
-            updateNotification(message)
-        }
+        ClassroomBus.update { it.copy(status = message) }
+        updateNotification(message)
     }
 
     /**
@@ -241,9 +164,9 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
 
             chunks.forEach { chunk ->
                 add(chunk.title)
-                val chunkText = chunk.text.take(12_000)
-                QUOTED_TERM.findAll(chunkText).forEach { match -> add(match.groupValues[1]) }
-                TECH_TERM.findAll(chunkText).forEach { match -> add(match.value) }
+                val text = chunk.text.take(12_000)
+                QUOTED_TERM.findAll(text).forEach { match -> add(match.groupValues[1]) }
+                TECH_TERM.findAll(text).forEach { match -> add(match.value) }
             }
         }
 
@@ -258,7 +181,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在停止录音并收尾…") }
         updateNotification("录音已停止 · 正在收尾最后一句")
 
-        backgroundScope.launch {
+        scope.launch {
             delay(6_000L)
             continueStopSequence()
         }
@@ -270,24 +193,21 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         if (!finishSequenceStarted.compareAndSet(false, true)) return
         val finishingSession = sessionId
         if (app.graph.settings.autoNotes && finishingSession != null) {
-            uiScope.launch {
-                ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在整理最后课堂笔记…") }
-                updateNotification("录音已结束 · 正在整理最后课堂笔记")
-            }
+            ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在整理最后课堂笔记…") }
+            updateNotification("录音已结束 · 正在整理最后课堂笔记")
             val done = CompletableDeferred<Unit>()
-            notes.summarizeNow(finishingSession) { done.complete(Unit) }
-            backgroundScope.launch {
+            AutoNotePipeline(app, app.applicationScope).summarizeNow(finishingSession) { done.complete(Unit) }
+            scope.launch {
                 withTimeoutOrNull(12_000L) { done.await() }
                 finishSessionAndStop(finishingSession)
             }
         } else {
-            backgroundScope.launch { finishSessionAndStop(finishingSession) }
+            finishSessionAndStop(finishingSession)
         }
     }
 
     private fun finishSessionAndStop(finishingSession: String?) {
-        runCatching { finishingSession?.let { app.graph.db.endSession(it) } }
-            .onFailure { Log.e(TAG, "Failed to finish classroom session", it) }
+        finishingSession?.let { app.graph.db.endSession(it) }
         app.graph.settings.activeSessionId = null
         sessionId = null
         stopSelf()
@@ -301,10 +221,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
             app.graph.settings.activeSessionId = sessionId
         }
         started = false
-        rootJob.cancel()
-        eventDispatcher.close()
-        questionDispatcher.close()
-        noteDispatcher.close()
+        scope.cancel()
         ClassroomBus.update {
             it.copy(listening = false, stopping = false, status = "未开始听课", partial = "", sessionId = null)
         }
@@ -370,7 +287,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         private const val CHANNEL_ID = "classhelper_listening"
         private const val NOTIFICATION_ID = 101
         private const val MAX_HOTWORDS = 48
-        private const val TAG = "ClassroomService"
         private val HOTWORD_SPLIT = Regex("[\\r\\n,，;；/]+")
         private val QUOTED_TERM = Regex("[《“「『【]([^》”」』】\\n]{2,24})[》”」』】]")
         private val TECH_TERM = Regex("\\b[A-Z][A-Z0-9+.#_-]{1,15}\\b")
