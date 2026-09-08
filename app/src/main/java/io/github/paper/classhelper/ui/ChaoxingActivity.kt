@@ -5,6 +5,7 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -200,7 +201,7 @@ class ChaoxingActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(18), 0, dp(24))
         }
-        scroll.addView(content, ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT))
+        scroll.addView(content, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
         content.addView(TextView(this).apply {
@@ -217,7 +218,7 @@ class ChaoxingActivity : AppCompatActivity() {
         val accountLayout = TextInputLayout(this).apply { hint = "学习通账号 / 手机号" }
         accountEdit = TextInputEditText(accountLayout.context).apply {
             inputType = InputType.TYPE_CLASS_TEXT
-            singleLine = true
+            setSingleLine(true)
         }
         accountLayout.addView(accountEdit)
         content.addView(accountLayout, matchParams())
@@ -228,7 +229,7 @@ class ChaoxingActivity : AppCompatActivity() {
         }
         passwordEdit = TextInputEditText(passwordLayout.context).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            singleLine = true
+            setSingleLine(true)
         }
         passwordLayout.addView(passwordEdit)
         content.addView(passwordLayout, matchParams(top = 10))
