@@ -12,10 +12,15 @@ import io.github.paper.classhelper.ClassHelperApp
 import io.github.paper.classhelper.R
 import io.github.paper.classhelper.llm.LlmClient
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 
-/** Dedicated question lane; retrieval + LLM never execute on the Zipformer recognizer thread. */
+/**
+ * High-priority question lane. Questions are not discarded when the teacher asks
+ * several in a row. The newest answer owns the preview; older jobs can still
+ * finish quietly and are persisted to history.
+ */
 class QuestionPipeline(
     private val context: Context,
     private val scope: CoroutineScope
@@ -25,7 +30,7 @@ class QuestionPipeline(
 
     fun answer(question: String, sessionId: String? = app.graph.settings.activeSessionId) {
         val seq = sequence.incrementAndGet()
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             val settings = app.graph.settings
             val db = app.graph.db
             val contextHits = app.graph.knowledge.retrieve(
