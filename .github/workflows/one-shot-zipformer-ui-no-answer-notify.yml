@@ -1,0 +1,129 @@
+name: One-shot Zipformer UI and answer notification cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-zipformer-ui-no-answer-notify.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply requested cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_required(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old!r}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_required(
+              'app/src/main/res/layout/activity_reader.xml',
+              'SenseVoiceSmall INT8 · 轻量多语言',
+              'Zipformer Streaming INT8 · 中文实时识别',
+          )
+
+          settings_xml = Path('app/src/main/res/layout/activity_settings.xml')
+          sx = settings_xml.read_text(encoding='utf-8')
+          replacements = {
+              'SenseVoiceSmall INT8 · 中英日韩粤': 'Zipformer Streaming INT8 · 中文实时识别',
+              '约 230 MB。下载完成后全部在设备本地识别，课堂音频不需要上传到 ASR 服务。支持普通话、粤语、英语、日语和韩语。': '约 165 MB。下载完成后全部在设备本地流式识别，课堂音频不需要上传到 ASR 服务。面向中文课堂，支持实时 partial、endpoint 与热词偏置。',
+              '课程术语 / 专业词（当前 SenseVoice 不做热词偏置）': '课程术语 / 专业词（Zipformer 支持热词偏置）',
+          }
+          for old, new in replacements.items():
+              if old not in sx:
+                  raise SystemExit(f'missing expected settings text: {old!r}')
+              sx = sx.replace(old, new)
+          sx, n = re.subn(
+              r'\n\s*<com\.google\.android\.material\.checkbox\.MaterialCheckBox\n\s*android:id="@\+id/showAnswerNotificationCheck"[\s\S]*?/>',
+              '',
+              sx,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit('answer notification checkbox not found exactly once')
+          settings_xml.write_text(sx, encoding='utf-8')
+
+          settings_kt = Path('app/src/main/java/io/github/paper/classhelper/ui/SettingsActivity.kt')
+          sk = settings_kt.read_text(encoding='utf-8')
+          for line in [
+              '        val notify = findViewById<CheckBox>(R.id.showAnswerNotificationCheck)\n',
+              '        notify.isChecked = s.showAnswerNotification\n',
+              '            s.showAnswerNotification = notify.isChecked\n',
+          ]:
+              if line not in sk:
+                  raise SystemExit(f'missing SettingsActivity line: {line!r}')
+              sk = sk.replace(line, '')
+          settings_kt.write_text(sk, encoding='utf-8')
+
+          qp = Path('app/src/main/java/io/github/paper/classhelper/classroom/QuestionPipeline.kt')
+          q = qp.read_text(encoding='utf-8')
+          for imp in [
+              'import android.Manifest\n',
+              'import android.app.NotificationChannel\n',
+              'import android.app.NotificationManager\n',
+              'import android.content.pm.PackageManager\n',
+              'import android.os.Build\n',
+              'import androidx.core.app.NotificationCompat\n',
+              'import androidx.core.content.ContextCompat\n',
+              'import io.github.paper.classhelper.R\n',
+          ]:
+              q = q.replace(imp, '')
+          old_call = '                if (settings.showAnswerNotification && answer.isNotBlank()) showAnswerNotification(question, answer, seq)\n'
+          if old_call not in q:
+              raise SystemExit('answer notification call not found')
+          q = q.replace(old_call, '')
+          q, n = re.subn(
+              r'\n    private fun showAnswerNotification\([\s\S]*?\n    companion object \{ const val ANSWER_CHANNEL = "classhelper_answers" \}\n',
+              '\n',
+              q,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit('answer notification implementation not found exactly once')
+          qp.write_text(q, encoding='utf-8')
+
+          gradle = Path('app/build.gradle.kts')
+          g = gradle.read_text(encoding='utf-8')
+          if 'versionCode = 201' not in g or 'versionName = "1.10.1-memory"' not in g:
+              raise SystemExit('unexpected current version')
+          g = g.replace('versionCode = 201', 'versionCode = 202')
+          g = g.replace('versionName = "1.10.1-memory"', 'versionName = "1.10.2-ui"')
+          gradle.write_text(g, encoding='utf-8')
+
+          Path('RELEASE_NOTES_CURRENT.md').write_text(
+              '- 修复首页仍显示 SenseVoiceSmall 的旧文案；实际语音识别引擎一直是 Zipformer Streaming INT8，本版首页与设置页统一显示真实模型。\n'
+              '- 清理设置页残留的 SenseVoice 多语言/不支持热词描述，改为 Zipformer 中文实时识别、partial、endpoint 与热词偏置说明。\n'
+              '- 按用户要求移除老师问题/LLM 答案的系统通知：问题与答案只在应用内课堂助手和历史记录中显示，不再创建高优先级答案通知。\n'
+              '- 持续听课所需的前台服务常驻通知仍保留，避免 Android 后台限制中断录音。\n'
+              '- 保留 1.10.1 的低内存 PDF/OCR/知识库修复、1.9.2 无丢帧 PCM 环形缓冲和学习通课程资源功能。\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/res/layout/activity_reader.xml \
+                  app/src/main/res/layout/activity_settings.xml \
+                  app/src/main/java/io/github/paper/classhelper/ui/SettingsActivity.kt \
+                  app/src/main/java/io/github/paper/classhelper/classroom/QuestionPipeline.kt \
+                  app/build.gradle.kts RELEASE_NOTES_CURRENT.md
+          git commit -m "fix(ui): show Zipformer and disable answer notifications"
+          git push origin HEAD:main
