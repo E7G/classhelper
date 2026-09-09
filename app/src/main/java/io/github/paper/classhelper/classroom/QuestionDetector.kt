@@ -7,6 +7,12 @@ class QuestionDetector {
     private val history = mutableListOf<String>()
     private var lastAccepted = ""
 
+    /** Cheap prefilter used before the pause gate; it does not mutate detector state. */
+    fun mayBeQuestion(text: String): Boolean {
+        val normalized = normalize(text)
+        return normalized.length >= 3 && hasQuestionCore(normalized)
+    }
+
     fun acceptPartial(partialText: String): String? {
         val text = normalize(partialText)
         if (text.length !in 6..180 || !hasQuestionCore(text)) return null
