@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 211
-        versionName = "1.11.1-courses"
+        versionCode = 212
+        versionName = "1.11.2-pdf"
         vectorDrawables.useSupportLibrary = true
     }
 

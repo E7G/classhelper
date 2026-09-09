@@ -96,12 +96,7 @@ class ChaoxingActivity : AppCompatActivity() {
             }
             lifecycleScope.launch {
                 setBusy(true, "准备同步《${displayCourseName(course)}》…")
-                val sync = ChaoxingResourceSync(
-                    this@ChaoxingActivity,
-                    app.graph.db,
-                    app.graph.settings,
-                    app.graph.courseCatalog,
-                )
+                val sync = ChaoxingResourceSync(this@ChaoxingActivity, app.graph.db, app.graph.settings)
                 runCatching {
                     sync.sync(client, course) { message -> runOnUiThread { statusText.text = message } }
                 }.onSuccess { result ->
@@ -109,7 +104,7 @@ class ChaoxingActivity : AppCompatActivity() {
                     val skipped = if (result.skippedLargeFiles > 0) " · ${result.skippedLargeFiles} 个超大/失败课件仅保留在线地址" else ""
                     setBusy(
                         false,
-                        "同步完成 · ${result.chapters} 章 · ${result.resources} 个资源 · ${result.indexedChunks} 个知识片段 · 提取 ${result.extractedPdfPages} 页 PDF$skipped\n课程已经加入“我的课程”；可转 PDF 的课件会缓存到课程资料里，可直接用内置阅读器打开。",
+                        "同步完成 · ${result.chapters} 章 · ${result.resources} 个资源 · ${result.indexedChunks} 个知识片段 · 提取 ${result.extractedPdfPages} 页 PDF$skipped\n课堂问答会优先调用这门课程资源。",
                     )
                     renderSavedState()
                 }.onFailure {
@@ -125,7 +120,7 @@ class ChaoxingActivity : AppCompatActivity() {
             passwordLayout.helperText = "登录成功后密码会加密保存，退出账号时清除。"
             courses = emptyList()
             renderCourseSpinner()
-            setBusy(false, "已退出学习通并清除保存的账号密码/Cookie；已同步到本地的课程和 PDF 不会删除。")
+            setBusy(false, "已退出学习通并清除保存的账号密码/Cookie")
         }
 
         courseSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -141,7 +136,7 @@ class ChaoxingActivity : AppCompatActivity() {
             .onSuccess { loaded ->
                 courses = loaded
                 renderCourseSpinner()
-                setBusy(false, "已读取 ${loaded.size} 门课程 · 同步后会作为独立课程出现在首页")
+                setBusy(false, "已读取 ${loaded.size} 门课程 · 选择课程后同步到本地知识库")
             }
             .onFailure { setBusy(false, "课程读取失败：${it.message ?: it.javaClass.simpleName}") }
     }
@@ -159,7 +154,7 @@ class ChaoxingActivity : AppCompatActivity() {
                 SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(it))
             }.orEmpty()
             val savedName = sanitizeCourseName(s.chaoxingCourseName)
-            statusText.text = "最近同步课程：$savedName" + if (syncTime.isNotBlank()) "\n上次同步 $syncTime" else ""
+            statusText.text = "当前课程资源：$savedName" + if (syncTime.isNotBlank()) "\n上次同步 $syncTime" else ""
         }
     }
 
@@ -190,8 +185,8 @@ class ChaoxingActivity : AppCompatActivity() {
     private fun renderCourseMeta(course: ChaoxingCourse?) {
         courseMetaText.text = when {
             course == null -> "登录后会显示你当前账号可访问的课程。"
-            course.teacher.isNotBlank() -> "教师：${course.teacher} · 同步后课件会作为课程内独立资源保存"
-            else -> "选择后同步章节、附件，以及超星提供的 PDF 课件版本。"
+            course.teacher.isNotBlank() -> "教师：${course.teacher}"
+            else -> "选择后可同步章节、课件和可读取的 PDF 文本。"
         }
     }
 
@@ -245,7 +240,7 @@ class ChaoxingActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         content.addView(TextView(this).apply {
-            text = "登录自己的账号，选择课程后同步章节和课件。课程会作为独立容器保存，可转 PDF 的附件会缓存到课程资料中。只读取当前账号正常可访问的资源，不刷任务、不提交学习进度。"
+            text = "登录自己的账号，选择课程后同步章节和课件。只读取当前账号正常可访问的资源，不刷任务、不提交学习进度。"
             textSize = 13f
             setLineSpacing(0f, 1.18f)
             setPadding(0, dp(8), 0, dp(4))
@@ -258,7 +253,9 @@ class ChaoxingActivity : AppCompatActivity() {
         content.addView(loginCardContent.first, matchParams(top = 16))
         val loginBody = loginCardContent.second
 
-        val accountLayout = TextInputLayout(this).apply { hint = "学习通账号 / 手机号" }
+        val accountLayout = TextInputLayout(this).apply {
+            hint = "学习通账号 / 手机号"
+        }
         accountEdit = TextInputEditText(accountLayout.context).apply {
             inputType = InputType.TYPE_CLASS_TEXT
             setSingleLine(true)
@@ -303,7 +300,7 @@ class ChaoxingActivity : AppCompatActivity() {
         refreshButton = outlinedButton("刷新课程列表")
         courseBody.addView(refreshButton, matchParams(top = 14, height = 52))
 
-        syncButton = primaryButton("同步课程与 PDF 课件")
+        syncButton = primaryButton("同步到课堂知识库")
         courseBody.addView(syncButton, matchParams(top = 10, height = 56))
 
         val statusCard = MaterialCardView(this).apply {
@@ -343,7 +340,10 @@ class ChaoxingActivity : AppCompatActivity() {
     }
 
     private fun sectionCard(title: String, subtitle: String): Pair<MaterialCardView, LinearLayout> {
-        val card = MaterialCardView(this).apply { radius = dp(26).toFloat(); cardElevation = 0f }
+        val card = MaterialCardView(this).apply {
+            radius = dp(26).toFloat()
+            cardElevation = 0f
+        }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(18), dp(18), dp(18))
@@ -380,6 +380,7 @@ class ChaoxingActivity : AppCompatActivity() {
             isAllCaps = false
         }
 
+    /** All positive custom heights are dp, never raw px. This fixes flattened MaterialButtons on high-DPI tablets. */
     private fun matchParams(top: Int = 0, height: Int = LinearLayout.LayoutParams.WRAP_CONTENT): LinearLayout.LayoutParams {
         val resolvedHeight = when (height) {
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT -> height

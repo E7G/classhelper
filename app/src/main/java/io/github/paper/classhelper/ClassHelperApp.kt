@@ -5,7 +5,6 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.google.android.material.color.DynamicColors
 import io.github.paper.classhelper.data.CourseDb
 import io.github.paper.classhelper.asr.AsrModelManager
-import io.github.paper.classhelper.course.CourseCatalog
 import io.github.paper.classhelper.knowledge.KnowledgeRepository
 import io.github.paper.classhelper.llm.LlmClient
 import io.github.paper.classhelper.pdf.PdfWorkspaceManager
@@ -38,7 +37,6 @@ class ClassHelperApp : Application() {
             asrModels = asrModels,
             ocrModels = ocrModels,
             db = db,
-            courseCatalog = CourseCatalog(this),
             workspace = workspace,
             knowledge = KnowledgeRepository(db),
             llm = LlmClient(settings)
@@ -52,7 +50,6 @@ data class AppGraph(
     val asrModels: AsrModelManager,
     val ocrModels: OcrModelManager,
     val db: CourseDb,
-    val courseCatalog: CourseCatalog,
     val workspace: PdfWorkspaceManager,
     val knowledge: KnowledgeRepository,
     val llm: LlmClient
