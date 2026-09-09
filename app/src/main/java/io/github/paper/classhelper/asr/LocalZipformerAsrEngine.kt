@@ -1,5 +1,6 @@
 package io.github.paper.classhelper.asr
 
+import android.os.SystemClock
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
 import com.k2fsa.sherpa.onnx.FeatureConfig
@@ -39,6 +40,7 @@ class LocalZipformerAsrEngine(
     private var drainScheduled = false
 
     @Volatile private var listener: StreamingAsrEngine.Listener? = null
+    @Volatile private var lastBacklogNoticeMs = 0L
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
     private var lastPartial = ""
@@ -83,7 +85,9 @@ class LocalZipformerAsrEngine(
                     ),
                     enableEndpoint = true,
                     decodingMethod = if (hotwords.isBlank()) "greedy_search" else "modified_beam_search",
-                    maxActivePaths = 4,
+                    // Two paths are enough for classroom hotword bias and much less likely to fall
+                    // behind realtime than the previous four-path configuration.
+                    maxActivePaths = if (hotwords.isBlank()) 1 else 2,
                     hotwordsScore = 2.0f,
                 )
                 val createdRecognizer = OnlineRecognizer(assetManager = null, config = config)
@@ -92,10 +96,11 @@ class LocalZipformerAsrEngine(
                 stream = createdStream
                 lastPartial = ""
                 speechStatusShown = false
+                lastBacklogNoticeMs = 0L
                 if (running.get()) {
                     listener.onState(
                         if (hotwords.isBlank()) "Zipformer 已就绪 · 实时中文识别"
-                        else "Zipformer 已就绪 · 实时中文识别 · 热词已启用",
+                        else "Zipformer 已就绪 · 实时中文识别 · 手动热词已启用",
                     )
                     scheduleDrainIfNeeded()
                 }
@@ -113,9 +118,6 @@ class LocalZipformerAsrEngine(
 
         var shouldSchedule = false
         synchronized(audioLock) {
-            // The ring holds about three minutes of raw PCM. We do not discard old audio when it is
-            // full. Instead the capture thread waits briefly for the decoder to free space. With the
-            // batched decoder this path should only be reachable on severely overloaded devices.
             while (running.get() && pcmRing.size - pcmSize < chunk.size) {
                 try {
                     audioLock.wait(RING_FULL_WAIT_MS)
@@ -174,17 +176,18 @@ class LocalZipformerAsrEngine(
     /** Decode 4 capture frames (~240 ms) per JNI/recognizer feed to reduce per-frame overhead. */
     private fun drainPcmBatches() {
         while (running.get()) {
-            val hasBatch = synchronized(audioLock) {
+            val backlogMs = synchronized(audioLock) {
                 if (pcmSize < DECODE_BATCH_BYTES) {
                     drainScheduled = false
-                    false
+                    -1
                 } else {
                     readPcmLocked(decodePcm, DECODE_BATCH_BYTES)
                     audioLock.notifyAll()
-                    true
+                    bufferedAudioMsLocked()
                 }
             }
-            if (!hasBatch) return
+            if (backlogMs < 0) return
+            maybeReportBacklog(backlogMs)
             convertPcm16ToFloat(decodePcm, decodeSamples, DECODE_BATCH_BYTES)
             acceptSamples(decodeSamples)
         }
@@ -193,6 +196,23 @@ class LocalZipformerAsrEngine(
             audioLock.notifyAll()
         }
     }
+
+    private fun maybeReportBacklog(backlogMs: Int) {
+        if (backlogMs < BACKLOG_WARN_MS) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBacklogNoticeMs < BACKLOG_NOTICE_INTERVAL_MS) return
+        lastBacklogNoticeMs = now
+        listener?.onState(
+            String.format(
+                java.util.Locale.getDefault(),
+                "识别负载较高 · 正在追赶约 %.1f 秒音频",
+                backlogMs / 1000.0,
+            ),
+        )
+    }
+
+    private fun bufferedAudioMsLocked(): Int =
+        ((pcmSize.toLong() * 1000L) / (SAMPLE_RATE * BYTES_PER_SAMPLE)).toInt()
 
     private fun readPcmLocked(target: ByteArray, count: Int) {
         var dst = 0
@@ -217,7 +237,6 @@ class LocalZipformerAsrEngine(
         }
     }
 
-    /** Flush the final sub-batch after AudioCapture has stopped. Runs on the recognizer worker. */
     private fun drainRemainingPcm() {
         while (true) {
             val count = synchronized(audioLock) {
@@ -233,11 +252,7 @@ class LocalZipformerAsrEngine(
                 }
             }
             if (count <= 0) return
-            val samples = if (count == DECODE_BATCH_BYTES) {
-                decodeSamples
-            } else {
-                FloatArray(count / 2)
-            }
+            val samples = if (count == DECODE_BATCH_BYTES) decodeSamples else FloatArray(count / 2)
             convertPcm16ToFloat(decodePcm, samples, count)
             acceptSamples(samples)
         }
@@ -273,10 +288,11 @@ class LocalZipformerAsrEngine(
 
     private fun finalizeEndpoint(rec: OnlineRecognizer, current: OnlineStream) {
         val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
-        if (finalText.isNotBlank()) listener?.onFinal(finalText)
+        // Reset native state first so a slow app-side callback never keeps an endpoint open.
         rec.reset(current)
         lastPartial = ""
         speechStatusShown = false
+        if (finalText.isNotBlank()) listener?.onFinal(finalText)
         listener?.onState("Zipformer 已就绪 · 等待讲话")
     }
 
@@ -288,8 +304,6 @@ class LocalZipformerAsrEngine(
         runCatching {
             worker.execute {
                 try {
-                    // Any full-batch drain task queued before this one runs first. Then preserve the
-                    // last partial batch here so stopping a class never clips the final words.
                     drainRemainingPcm()
                     val rec = recognizer
                     val current = stream
@@ -358,13 +372,14 @@ class LocalZipformerAsrEngine(
     companion object {
         private const val SAMPLE_RATE = 16_000
         private const val BYTES_PER_SAMPLE = 2
-        private const val MAX_HOTWORDS = 64
+        private const val MAX_HOTWORDS = 24
         private const val CAPTURE_FRAME_MS = 60
         private const val DECODE_BATCH_FRAMES = 4
         private const val DECODE_BATCH_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * CAPTURE_FRAME_MS * DECODE_BATCH_FRAMES / 1000
-        // 180 s of 16 kHz mono PCM16 is ~5.5 MiB: fixed and tiny compared with the old unbounded heap growth.
         private const val PCM_RING_SECONDS = 180
         private const val PCM_RING_CAPACITY_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * PCM_RING_SECONDS
         private const val RING_FULL_WAIT_MS = 20L
+        private const val BACKLOG_WARN_MS = 1_500
+        private const val BACKLOG_NOTICE_INTERVAL_MS = 3_000L
     }
 }
