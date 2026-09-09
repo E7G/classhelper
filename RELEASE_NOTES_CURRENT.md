@@ -2,7 +2,7 @@
 - Zipformer 实时性优化：自动 PDF 术语不再让每节课强制进入 modified-beam；只有手动热词启用 beam，active paths 从 4 降为 2，减少持续积压。
 - 增加 PCM 解码积压提示；积压超过约 1.5 秒时会显示“正在追赶音频”，便于区分性能积压与麦克风中断。
 - ASR final 回调只做快速交接；SQLite、问题检测和 PDF 匹配在现有单一 service scope 上有序处理，不恢复旧版多线程池架构。
-- 前台听课增加 PARTIAL_WAKE_LOCK，降低熄屏、系统省电或调度抖动造成录音/解码停顿的概率。
+- 保留 microphone 前台服务；录音器异常时独立自动恢复，不中断当前课堂会话和 Zipformer 识别流。
 - 重新设计学习通课程资源页：登录、课程选择、同步状态分区显示，所有按钮使用真实 dp 高度，修复高 DPI 平板上按钮被压成一条线。
 - 学习通课程选择器只显示课程名称；courseId/classId 仅内部保存。优先按当前 div.course / span.course-name[title] 结构读取真实课程名，解析失败时显示“未命名课程”，不再显示“课程 + 一串数字”。
 - 保留学习通账号密码加密保存、课程资源同步、低内存 PDF/OCR、无主动丢帧 PCM 环形缓冲和 Zipformer Streaming INT8。
