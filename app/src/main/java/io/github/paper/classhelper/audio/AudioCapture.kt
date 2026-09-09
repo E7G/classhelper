@@ -5,13 +5,20 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Process
+import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Minimal-allocation 16 kHz PCM capture with clean recovery after AudioRecord failures. */
 class AudioCapture {
+    data class Health(
+        val running: Boolean,
+        val lastReadAgeMs: Long,
+    )
+
     private val running = AtomicBoolean(false)
     @Volatile private var recorder: AudioRecord? = null
     @Volatile private var thread: Thread? = null
+    @Volatile private var lastReadMs: Long = 0L
 
     @SuppressLint("MissingPermission")
     fun start(onChunk: (ByteArray) -> Unit, onError: (Throwable) -> Unit) {
@@ -44,6 +51,7 @@ class AudioCapture {
         }
 
         recorder = audio
+        lastReadMs = SystemClock.elapsedRealtime()
         try {
             audio.startRecording()
         } catch (t: Throwable) {
@@ -70,6 +78,7 @@ class AudioCapture {
                             continue
                         }
                         zeroReads = 0
+                        lastReadMs = SystemClock.elapsedRealtime()
                         off += n
                     }
                     if (off == buf.size) onChunk(buf)
@@ -77,7 +86,6 @@ class AudioCapture {
             } catch (t: Throwable) {
                 if (running.get()) onError(t)
             } finally {
-                // Critical for recovery: a transient AudioRecord failure must make start() usable again.
                 running.set(false)
                 runCatching { audio.stop() }
                 audio.release()
@@ -89,6 +97,15 @@ class AudioCapture {
 
     fun isRunning(): Boolean = running.get()
 
+    fun health(): Health {
+        val now = SystemClock.elapsedRealtime()
+        val readAt = lastReadMs
+        return Health(
+            running = running.get(),
+            lastReadAgeMs = if (readAt <= 0L) Long.MAX_VALUE else (now - readAt).coerceAtLeast(0L),
+        )
+    }
+
     fun stop() {
         running.set(false)
         runCatching { recorder?.stop() }
@@ -97,8 +114,6 @@ class AudioCapture {
     }
 
     companion object {
-        // READ_BLOCKING should not repeatedly return zero. Treat a persistent zero-read loop as a
-        // broken recorder so ClassroomService can rebuild it instead of appearing to keep listening.
         private const val MAX_ZERO_READS = 8
     }
 }
