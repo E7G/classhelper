@@ -44,7 +44,7 @@ class CourseHubActivity : AppCompatActivity() {
     private lateinit var addPdfButton: MaterialButton
 
     private var courses: List<CourseRow> = emptyList()
-    private var resources: List<CourseResourceRow> = emptyList()
+    private var courseResources: List<CourseResourceRow> = emptyList()
 
     private val pickPdf = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
@@ -88,24 +88,24 @@ class CourseHubActivity : AppCompatActivity() {
     }
 
     private fun renderCourse(course: CourseRow?) {
-        resources = course?.let { app.graph.courseCatalog.listResources(it.id) }.orEmpty()
+        courseResources = course?.let { app.graph.courseCatalog.listResources(it.id) }.orEmpty()
         courseMeta.text = when (course?.source) {
-            "chaoxing" -> "学习通课程 · ${resources.size} 个已发现资源"
-            "local" -> "本地自定义课程 · ${resources.size} 份资料"
+            "chaoxing" -> "学习通课程 · ${courseResources.size} 个已发现资源"
+            "local" -> "本地自定义课程 · ${courseResources.size} 份资料"
             else -> "课程可以没有 PDF，也可以挂多份资料。"
         }
-        val labels = if (resources.isEmpty()) listOf("暂无 PDF 资料") else resources.map {
+        val labels = if (courseResources.isEmpty()) listOf("暂无 PDF 资料") else courseResources.map {
             val type = if (it.documentId != null && it.localPath.isNotBlank()) "PDF" else it.kind.uppercase()
             "$type · ${it.title}"
         }
         resourceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
-        resourceSpinner.isEnabled = resources.isNotEmpty()
-        openResourceButton.isEnabled = resources.any { it.documentId != null && it.localPath.isNotBlank() }
+        resourceSpinner.isEnabled = courseResources.isNotEmpty()
+        openResourceButton.isEnabled = courseResources.any { it.documentId != null && it.localPath.isNotBlank() }
         enterCourseButton.isEnabled = course != null
         addPdfButton.isEnabled = course?.source == "local"
-        renderResource(resources.firstOrNull())
+        renderResource(courseResources.firstOrNull())
     }
 
     private fun renderResource(resource: CourseResourceRow?) {
@@ -118,7 +118,7 @@ class CourseHubActivity : AppCompatActivity() {
     }
 
     private fun selectedCourse(): CourseRow? = courses.getOrNull(courseSpinner.selectedItemPosition)
-    private fun selectedResource(): CourseResourceRow? = resources.getOrNull(resourceSpinner.selectedItemPosition)
+    private fun selectedResource(): CourseResourceRow? = courseResources.getOrNull(resourceSpinner.selectedItemPosition)
 
     private fun activateCourse(course: CourseRow, clearDocument: Boolean) {
         val s = app.graph.settings
@@ -126,7 +126,6 @@ class CourseHubActivity : AppCompatActivity() {
         s.currentCourseName = course.name
         s.currentCourseKnowledgeDocumentId = course.knowledgeDocumentId
         if (course.source == "chaoxing") {
-            // Keep legacy fields in sync for older retrieval paths/settings screens.
             s.chaoxingCourseName = course.name
             s.chaoxingCourseDocumentId = course.knowledgeDocumentId
         }
@@ -324,7 +323,7 @@ class CourseHubActivity : AppCompatActivity() {
         }
         resourceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                renderResource(resources.getOrNull(position))
+                renderResource(courseResources.getOrNull(position))
             }
             override fun onNothingSelected(parent: AdapterView<*>?) = renderResource(null)
         }
@@ -367,7 +366,7 @@ class CourseHubActivity : AppCompatActivity() {
             topMargin = dp(top)
         }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
+    private fun dp(value: Int): Int = (value * getResources().displayMetrics.density + 0.5f).toInt()
 
     companion object {
         const val EXTRA_COURSE_ONLY = "course_only"
