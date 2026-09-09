@@ -7,7 +7,7 @@ import android.media.MediaRecorder
 import android.os.Process
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Minimal allocation 16 kHz PCM capture. No wake lock is held here. */
+/** Minimal-allocation 16 kHz PCM capture with clean recovery after AudioRecord failures. */
 class AudioCapture {
     private val running = AtomicBoolean(false)
     @Volatile private var recorder: AudioRecord? = null
@@ -18,35 +18,58 @@ class AudioCapture {
         if (!running.compareAndSet(false, true)) return
         val sampleRate = 16_000
         val min = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // Keep 60 ms callback granularity for low-latency streaming. A larger AudioRecord backing
-        // buffer gives the ASR thread extra headroom during brief CPU stalls without allocating per frame.
         val chunkBytes = 1_920
         val fourSecondsBytes = sampleRate * 2 * 4
         val bufferBytes = maxOf(min * 2, fourSecondsBytes)
-        val audio = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferBytes
-        )
+
+        val audio = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferBytes,
+            )
+        } catch (t: Throwable) {
+            running.set(false)
+            onError(t)
+            return
+        }
+
         if (audio.state != AudioRecord.STATE_INITIALIZED) {
             running.set(false)
             audio.release()
             onError(IllegalStateException("麦克风初始化失败"))
             return
         }
+
         recorder = audio
-        audio.startRecording()
+        try {
+            audio.startRecording()
+        } catch (t: Throwable) {
+            running.set(false)
+            recorder = null
+            audio.release()
+            onError(t)
+            return
+        }
+
         thread = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
             val buf = ByteArray(chunkBytes)
+            var zeroReads = 0
             try {
                 while (running.get()) {
                     var off = 0
                     while (off < buf.size && running.get()) {
                         val n = audio.read(buf, off, buf.size - off, AudioRecord.READ_BLOCKING)
                         if (n < 0) error("AudioRecord.read=$n")
+                        if (n == 0) {
+                            zeroReads++
+                            if (zeroReads >= MAX_ZERO_READS) error("AudioRecord 连续返回空数据")
+                            continue
+                        }
+                        zeroReads = 0
                         off += n
                     }
                     if (off == buf.size) onChunk(buf)
@@ -54,17 +77,28 @@ class AudioCapture {
             } catch (t: Throwable) {
                 if (running.get()) onError(t)
             } finally {
+                // Critical for recovery: a transient AudioRecord failure must make start() usable again.
+                running.set(false)
                 runCatching { audio.stop() }
                 audio.release()
-                recorder = null
+                if (recorder === audio) recorder = null
+                thread = null
             }
         }, "ClassHelper-Audio").also { it.start() }
     }
+
+    fun isRunning(): Boolean = running.get()
 
     fun stop() {
         running.set(false)
         runCatching { recorder?.stop() }
         thread?.interrupt()
         thread = null
+    }
+
+    companion object {
+        // READ_BLOCKING should not repeatedly return zero. Treat a persistent zero-read loop as a
+        // broken recorder so ClassroomService can rebuild it instead of appearing to keep listening.
+        private const val MAX_ZERO_READS = 8
     }
 }
