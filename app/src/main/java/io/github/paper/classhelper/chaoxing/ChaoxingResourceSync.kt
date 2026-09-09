@@ -5,6 +5,7 @@ import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import io.github.paper.classhelper.SettingsStore
+import io.github.paper.classhelper.course.CourseCatalog
 import io.github.paper.classhelper.data.ChunkRow
 import io.github.paper.classhelper.data.CourseDb
 import io.github.paper.classhelper.data.DocumentRow
@@ -20,17 +21,17 @@ import org.json.JSONObject
 import org.jsoup.Jsoup
 
 /**
- * Imports one authorized Chaoxing course into ClassHelper's local retrieval database.
+ * Imports one authorized Chaoxing course into ClassHelper.
  *
- * Indexing is staged directly in SQLite in small batches. Older code retained the entire course
- * (including hundreds of extracted PDF pages) as ChunkRow/String objects until sync finished,
- * creating a large Java-heap spike. The staging document keeps memory bounded and the previously
- * synced course remains intact until the final atomic promotion.
+ * The course itself is a first-class course container. Chapter text is indexed into one aggregate
+ * knowledge document, while every Chaoxing attachment that exposes a PDF representation is kept as
+ * a persistent private PDF file and registered as a child resource that ReaderActivity can reopen.
  */
 class ChaoxingResourceSync(
     context: Context,
     private val db: CourseDb,
     private val settings: SettingsStore,
+    private val catalog: CourseCatalog,
 ) {
     private val appContext = context.applicationContext
     private val http = OkHttpClient.Builder()
@@ -49,6 +50,14 @@ class ChaoxingResourceSync(
         require(chapters.isNotEmpty()) { "没有读取到课程章节；可能课程尚未开放" }
 
         val documentId = courseDocumentId(course)
+        val courseRow = catalog.upsertChaoxing(
+            courseId = course.courseId,
+            classId = course.classId,
+            cpi = course.cpi,
+            name = course.name,
+            knowledgeDocumentId = documentId,
+        )
+        val resourceRoot = File(appContext.filesDir, "course-resources/${safeName(courseRow.id)}").apply { mkdirs() }
         val stagingId = "$documentId:sync"
         val pending = ArrayList<ChunkRow>(CHUNK_BATCH_SIZE)
         var chunkIndex = 0
@@ -124,6 +133,7 @@ class ChaoxingResourceSync(
                         val name = property.optString("name").ifBlank { property.optString("bookname") }
                             .ifBlank { "$type ${i + 1}" }
                         val objectId = property.optString("objectid").takeIf { it.isNotBlank() }
+                        val sourceKey = objectId ?: "${chapter.knowledgeId}:$cardIndex:$i:${stableHash(name).take(12)}"
                         resourceCount++
 
                         val resolved = objectId?.let { runCatching { client.resolveResource(it) }.getOrNull() }
@@ -136,16 +146,54 @@ class ChaoxingResourceSync(
 
                         val pdfUrl = resolved?.pdfUrl
                         if (pdfUrl != null && objectId != null) {
-                            val temp = File(appContext.cacheDir, "chaoxing/${safeName(objectId)}.pdf")
-                            temp.parentFile?.mkdirs()
-                            onProgress("${chapterIndex + 1}/${chapters.size} · 读取课件：$name")
-                            if (downloadTo(pdfUrl, temp, MAX_PDF_BYTES)) {
-                                pdfPages += extractPdf(temp, "$name · ${chapter.title}", ::addChunk)
+                            val savedPdf = File(resourceRoot, "${safeName(objectId)}.pdf")
+                            onProgress("${chapterIndex + 1}/${chapters.size} · 缓存课件：$name")
+                            val ready = (savedPdf.isFile && savedPdf.length() > 0L) ||
+                                downloadTo(pdfUrl, savedPdf, MAX_PDF_BYTES)
+                            if (ready) {
+                                val pdfDocumentId = "cxpdf-${stableHash("${courseRow.id}:$objectId").take(28)}"
+                                db.upsertDocument(
+                                    DocumentRow(
+                                        id = pdfDocumentId,
+                                        sourceUri = "chaoxing://resource/$objectId",
+                                        workingPath = savedPdf.absolutePath,
+                                        title = name,
+                                        dirty = false,
+                                        kind = "chaoxing_pdf",
+                                        indexedAt = db.getDocument(pdfDocumentId)?.indexedAt ?: 0L,
+                                    ),
+                                )
+                                catalog.upsertResource(
+                                    courseId = courseRow.id,
+                                    title = name,
+                                    kind = "pdf",
+                                    documentId = pdfDocumentId,
+                                    localPath = savedPdf.absolutePath,
+                                    remoteUrl = pdfUrl,
+                                    sourceKey = sourceKey,
+                                )
+                                pdfPages += extractPdf(savedPdf, "$name · ${chapter.title}", ::addChunk)
                             } else {
                                 skippedLarge++
+                                catalog.upsertResource(
+                                    courseId = courseRow.id,
+                                    title = name,
+                                    kind = type,
+                                    documentId = null,
+                                    remoteUrl = resolved.sourceUrl ?: pdfUrl,
+                                    sourceKey = sourceKey,
+                                )
                                 chapterText.appendLine("课件过大或下载失败，已保留在线资源地址。")
                             }
-                            temp.delete()
+                        } else {
+                            catalog.upsertResource(
+                                courseId = courseRow.id,
+                                title = name,
+                                kind = type,
+                                documentId = null,
+                                remoteUrl = resolved?.sourceUrl.orEmpty(),
+                                sourceKey = sourceKey,
+                            )
                         }
                     }
                 }
@@ -153,8 +201,6 @@ class ChaoxingResourceSync(
             }
             flushPending()
 
-            // Promote the completed staging index in one small SQLite transaction. No course text
-            // is materialized back into Java while swapping the old and new index.
             database.beginTransaction()
             try {
                 database.delete("document_chunks", "document_id=?", arrayOf(documentId))
@@ -191,6 +237,9 @@ class ChaoxingResourceSync(
             settings.chaoxingCourseName = course.name
             settings.chaoxingCourseDocumentId = documentId
             settings.chaoxingLastSync = System.currentTimeMillis()
+            settings.currentCourseId = courseRow.id
+            settings.currentCourseName = courseRow.name
+            settings.currentCourseKnowledgeDocumentId = courseRow.knowledgeDocumentId
 
             ChaoxingSyncResult(
                 documentId = documentId,
@@ -213,6 +262,7 @@ class ChaoxingResourceSync(
             .header("Referer", "https://mooc1-2.chaoxing.com/")
             .get().build()
         return try {
+            val part = File(file.parentFile, file.name + ".part")
             http.newCall(request).execute().use download@{ response ->
                 if (!response.isSuccessful) return@download false
                 val body = response.body ?: return@download false
@@ -220,7 +270,7 @@ class ChaoxingResourceSync(
                 if (declared > maxBytes) return@download false
                 var total = 0L
                 var tooLarge = false
-                file.outputStream().buffered(128 * 1024).use { output ->
+                part.outputStream().buffered(128 * 1024).use { output ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(128 * 1024)
                         while (true) {
@@ -235,13 +285,20 @@ class ChaoxingResourceSync(
                         }
                     }
                 }
-                if (tooLarge) {
-                    file.delete()
+                if (tooLarge || part.length() <= 0L) {
+                    part.delete()
                     false
-                } else file.isFile && file.length() > 0
+                } else {
+                    if (file.exists()) file.delete()
+                    if (!part.renameTo(file)) {
+                        part.copyTo(file, overwrite = true)
+                        part.delete()
+                    }
+                    true
+                }
             }
         } catch (_: Throwable) {
-            file.delete()
+            File(file.parentFile, file.name + ".part").delete()
             false
         }
     }
@@ -306,10 +363,11 @@ class ChaoxingResourceSync(
 
     private fun courseDocumentId(course: ChaoxingCourse): String {
         val raw = "${course.courseId}:${course.classId}"
-        val hex = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-        return "cx-" + hex.take(28)
+        return "cx-" + stableHash(raw).take(28)
     }
+
+    private fun stableHash(raw: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
 
     private fun safeName(raw: String): String = raw.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
 
