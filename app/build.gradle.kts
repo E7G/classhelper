@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 209
-        versionName = "1.10.9-question-pause"
+        versionCode = 210
+        versionName = "1.11.0-courses"
         vectorDrawables.useSupportLibrary = true
     }
 
