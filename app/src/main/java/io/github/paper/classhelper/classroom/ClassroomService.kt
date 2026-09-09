@@ -74,9 +74,10 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
 
     @Volatile private var started = false
     @Volatile private var stopping = false
+    @Volatile private var speechRevision = 0L
     private val finishSequenceStarted = AtomicBoolean(false)
     private var sessionId: String? = null
-    private var partialQuestionJob: Job? = null
+    private var questionPauseJob: Job? = null
     private var audioRestartJob: Job? = null
     private var watchdogJob: Job? = null
 
@@ -108,6 +109,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private fun startListening() {
         started = true
         stopping = false
+        speechRevision = 0L
         finishSequenceStarted.set(false)
 
         val active = app.graph.settings.activeSessionId
@@ -198,31 +200,41 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
 
     override fun onPartial(text: String) {
         if (stopping) return
+        speechRevision += 1L
+        questionPauseJob?.cancel()
         val snapshot = text
-        val sid = sessionId
         uiScope.launch {
             if (!stopping) ClassroomBus.update { it.copy(partial = snapshot) }
         }
-
-        partialQuestionJob?.cancel()
-        if (snapshot.length >= 6) {
-            partialQuestionJob = eventScope.launch {
-                delay(PARTIAL_QUESTION_DEBOUNCE_MS)
-                if (!stopping) detector.acceptPartial(snapshot)?.let { questions.answer(it, sid) }
-            }
-        }
+        // Deliberately do not detect/answer questions from partial text. Continued speech means the
+        // teacher is still explaining, so any pending question candidate is invalidated immediately.
     }
 
     override fun onFinal(text: String) {
         if (stopping && finishSequenceStarted.get()) return
-        partialQuestionJob?.cancel()
+        questionPauseJob?.cancel()
         val clean = text.trim()
         if (clean.isBlank()) return
+        val candidateRevision = speechRevision + 1L
+        speechRevision = candidateRevision
         val sid = sessionId
         val docId = app.graph.settings.currentDocumentId
         val page = app.graph.settings.currentPage
 
         uiScope.launch { ClassroomBus.update { it.copy(partial = "") } }
+
+        // Thinking-pause gate: a question is only worth processing if the teacher actually leaves
+        // time to think. Zipformer's endpoint already includes ~0.75 s trailing silence; we require
+        // another quiet window here. Any new partial/final increments speechRevision and cancels it.
+        if (detector.mayBeQuestion(clean)) {
+            questionPauseJob = eventScope.launch {
+                delay(QUESTION_THINK_PAUSE_MS)
+                if (!stopping && speechRevision == candidateRevision) {
+                    detector.accept(clean)?.let { questions.answer(it, sid) }
+                }
+            }
+        }
+
         eventScope.launch {
             try {
                 app.graph.db.addTranscript(clean, sid, docId, page)
@@ -231,7 +243,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
                 }
 
                 notes.onFinalTranscript(sid)
-                detector.accept(clean)?.let { questions.answer(it, sid) }
 
                 if (docId != null && clean.length >= 6) {
                     pdfScope.launch {
@@ -314,7 +325,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         stopping = true
         watchdogJob?.cancel()
         audioRestartJob?.cancel()
-        partialQuestionJob?.cancel()
+        questionPauseJob?.cancel()
         audio.stop()
         uiScope.launch {
             ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在停止录音并收尾…") }
@@ -364,7 +375,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     override fun onDestroy() {
         watchdogJob?.cancel()
         audioRestartJob?.cancel()
-        partialQuestionJob?.cancel()
+        questionPauseJob?.cancel()
         audio.stop()
         runCatching { asr.stop() }
         if (started && !stopping) {
@@ -451,7 +462,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         private const val AUDIO_RESTART_DELAY_MS = 700L
         private const val WATCHDOG_INTERVAL_MS = 2_500L
         private const val AUDIO_STALL_MS = 7_000L
-        private const val PARTIAL_QUESTION_DEBOUNCE_MS = 650L
+        private const val QUESTION_THINK_PAUSE_MS = 1_200L
         private const val ASR_FINISH_TIMEOUT_MS = 6_000L
         private const val FINAL_NOTE_TIMEOUT_MS = 12_000L
         private val HOTWORD_SPLIT = Regex("[\\r\\n,，;；/]+")
