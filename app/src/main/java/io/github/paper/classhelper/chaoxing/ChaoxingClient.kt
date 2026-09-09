@@ -261,6 +261,30 @@ class ChaoxingClient(private val settings: SettingsStore) {
         if (content.isBlank()) return emptyList()
         val doc = Jsoup.parse(content)
         val out = LinkedHashMap<String, ChaoxingCourse>()
+        // Current Chaoxing course-list HTML uses div.course with the real title in
+        // span.course-name[title]. Parse that structure first so UI never has to expose numeric IDs.
+        for (course in doc.select("div.course")) {
+            if (course.selectFirst("a.not-open-tip, div.not-open-tip") != null) continue
+            val courseId = course.selectFirst("input.courseId, input[name=courseId], input[name=courseid]")
+                ?.attr("value").orEmpty().trim()
+            val classId = course.selectFirst("input.clazzId, input[name=clazzId], input[name=classId], input[name=clazzid]")
+                ?.attr("value").orEmpty().trim()
+            if (courseId.isBlank() || classId.isBlank()) continue
+            val link = course.selectFirst("a[href*=cpi], a[href]")
+            val rawUrl = link?.absUrl("href").takeUnless { it.isNullOrBlank() } ?: link?.attr("href").orEmpty()
+            val name = course.selectFirst("span.course-name[title], span.course-name, .course-name[title], .course-name")
+                ?.let { it.attr("title").ifBlank { it.text() } }?.trim().orEmpty()
+                .ifBlank { "未命名课程" }
+            val cpi = rawUrl.toHttpUrlOrNull()?.queryParameter("cpi").orEmpty().ifBlank {
+                course.selectFirst("input[name=cpi]")?.attr("value").orEmpty()
+            }
+            val teacher = course.selectFirst("p.color3[title], .teacher[title], .teacher")?.let {
+                it.attr("title").ifBlank { it.text() }
+            }.orEmpty().trim()
+            val classroom = course.select("p,span").firstOrNull { it.text().contains("班级") }
+                ?.text()?.substringAfter("班级：", "")?.substringAfter("班级:", "")?.trim().orEmpty()
+            out["$courseId:$classId"] = ChaoxingCourse(courseId, classId, cpi, name, teacher, classroom, rawUrl)
+        }
         val inputs = doc.select("input.courseId, input[name=courseId], input[name=courseid]")
         for (courseInput in inputs) {
             val courseId = courseInput.attr("value").trim()
@@ -276,10 +300,10 @@ class ChaoxingClient(private val settings: SettingsStore) {
                 href.contains("course", true) || href.contains("clazz", true)
             } ?: container.selectFirst("a[href]")
             val rawUrl = link?.absUrl("href").takeUnless { it.isNullOrBlank() } ?: link?.attr("href").orEmpty()
-            val name = container.selectFirst(".course-name[title], h3 span[title], h3 a[title], h3, h4")
+            val name = container.selectFirst(".course-name[title], .course-name, h3 span[title], h3 a[title], h3, h4")
                 ?.let { it.attr("title").ifBlank { it.text() } }?.trim().orEmpty()
                 .ifBlank { link?.attr("title").orEmpty().ifBlank { link?.text().orEmpty() } }
-                .ifBlank { "课程 $courseId" }
+                .ifBlank { "未命名课程" }
             val cpi = rawUrl.toHttpUrlOrNull()?.queryParameter("cpi").orEmpty().ifBlank {
                 container.selectFirst("input[name=cpi]")?.attr("value").orEmpty()
             }
@@ -301,7 +325,7 @@ class ChaoxingClient(private val settings: SettingsStore) {
                 val snippet = if (end > start) content.substring(start, end + 1) else m.value
                 val sdoc = Jsoup.parse(snippet)
                 val name = sdoc.selectFirst("[title],h3,h4")?.let { it.attr("title").ifBlank { it.text() } }
-                    ?.trim().orEmpty().ifBlank { "课程 $courseId" }
+                    ?.trim().orEmpty().ifBlank { "未命名课程" }
                 val href = sdoc.selectFirst("a[href]")?.attr("href").orEmpty()
                 val cpi = href.toHttpUrlOrNull()?.queryParameter("cpi").orEmpty()
                 out["$courseId:$classId"] = ChaoxingCourse(courseId, classId, cpi, name, "", "", href)
