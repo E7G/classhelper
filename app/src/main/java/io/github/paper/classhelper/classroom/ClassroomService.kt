@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import io.github.paper.classhelper.ClassHelperApp
@@ -28,10 +30,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val finalMutex = Mutex()
     private lateinit var app: ClassHelperApp
     private lateinit var asr: StreamingAsrEngine
     private lateinit var audio: AudioCapture
@@ -43,6 +48,8 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private val finishSequenceStarted = AtomicBoolean(false)
     private var sessionId: String? = null
     private var partialQuestionJob: Job? = null
+    private var audioRestartJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -70,6 +77,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         started = true
         stopping = false
         finishSequenceStarted.set(false)
+        acquireCpuWakeLock()
         val active = app.graph.settings.activeSessionId
         sessionId = active?.takeIf { app.graph.db.getSession(it)?.endedAt == null } ?: run {
             val title = "课堂 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}"
@@ -84,13 +92,44 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
             )
         }
         asr.start(this)
-        audio.start(onChunk = { asr.sendPcm16(it) }, onError = { onError("录音失败：${it.message}", it) })
+        startAudioCapture()
+    }
+
+    private fun startAudioCapture() {
+        if (stopping || !started || audio.isRunning()) return
+        audio.start(
+            onChunk = { asr.sendPcm16(it) },
+            onError = { scheduleAudioRestart(it) },
+        )
+    }
+
+    /**
+     * AudioRecord can occasionally die after routing, vendor power-management or driver errors.
+     * Recover the recorder independently so the class session and Zipformer stream keep running.
+     */
+    private fun scheduleAudioRestart(cause: Throwable) {
+        if (stopping || !started) return
+        Log.w(TAG, "Audio capture stopped; scheduling recorder rebuild", cause)
+        ClassroomBus.update { it.copy(status = "麦克风短暂中断 · 正在自动恢复录音…") }
+        scope.launch(Dispatchers.IO) { updateNotification("麦克风短暂中断 · 正在自动恢复") }
+        audioRestartJob?.cancel()
+        audioRestartJob = scope.launch {
+            delay(AUDIO_RESTART_DELAY_MS)
+            if (stopping || !started) return@launch
+            if (!audio.isRunning()) {
+                ClassroomBus.update { it.copy(status = "正在重新连接麦克风…") }
+                startAudioCapture()
+            }
+        }
     }
 
     override fun onState(state: String) {
         if (stopping) return
         ClassroomBus.update { it.copy(status = state, listening = true, stopping = false, sessionId = sessionId) }
-        updateNotification(state)
+        // NotificationManager is a Binder call. Never make the Zipformer decoder wait on it.
+        scope.launch(Dispatchers.IO) {
+            if (!stopping) updateNotification(state)
+        }
     }
 
     override fun onPartial(text: String) {
@@ -108,78 +147,77 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         partialQuestionJob?.cancel()
         val clean = text.trim()
         if (clean.isBlank()) return
+        val sid = sessionId
         val docId = app.graph.settings.currentDocumentId
         val page = app.graph.settings.currentPage
-        app.graph.db.addTranscript(clean, sessionId, docId, page)
-        ClassroomBus.update { it.copy(partial = "", historyVersion = it.historyVersion + 1) }
-        notes.onFinalTranscript(sessionId)
-        detector.accept(clean)?.let { questions.answer(it, sessionId) }
 
-        if (docId != null && clean.length >= 6) {
-            scope.launch(Dispatchers.Default) {
-                app.graph.knowledge.matchPage(clean, docId)?.let { match ->
-                    ClassroomBus.update { state -> state.copy(matchedPage = match.page, matchedLabel = match.label) }
+        // Return to the decoder immediately. Ordered DB/business work is serialized by one Mutex on
+        // the existing service scope; this is deliberately not the old multi-executor architecture.
+        ClassroomBus.update { it.copy(partial = "") }
+        scope.launch(Dispatchers.IO) {
+            finalMutex.withLock {
+                try {
+                    app.graph.db.addTranscript(clean, sid, docId, page)
+                    ClassroomBus.update { it.copy(historyVersion = it.historyVersion + 1) }
+                    notes.onFinalTranscript(sid)
+                    detector.accept(clean)?.let { questions.answer(it, sid) }
+
+                    if (docId != null && clean.length >= 6) {
+                        scope.launch(Dispatchers.Default) {
+                            runCatching { app.graph.knowledge.matchPage(clean, docId) }
+                                .onSuccess { match ->
+                                    if (match != null) {
+                                        ClassroomBus.update { state ->
+                                            state.copy(matchedPage = match.page, matchedLabel = match.label)
+                                        }
+                                    }
+                                }
+                                .onFailure { Log.w(TAG, "PDF page match failed", it) }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // Business persistence must never turn a healthy recognizer into an ASR error.
+                    Log.e(TAG, "Transcript post-processing failed", t)
                 }
             }
         }
     }
 
     override fun onError(message: String, cause: Throwable?) {
+        if (cause != null) Log.e(TAG, message, cause) else Log.e(TAG, message)
         ClassroomBus.update { it.copy(status = message) }
-        updateNotification(message)
+        scope.launch(Dispatchers.IO) { updateNotification(message) }
     }
 
     /**
-     * Build a small contextual-bias list for the streaming transducer. User-entered terms are kept
-     * first, then the current PDF contributes its title, nearby section titles, quoted terminology,
-     * and compact uppercase technical tokens. Keeping the list small avoids slowing beam search.
+     * Keep contextual beam search opt-in. Automatic PDF term extraction used to make almost every
+     * class enter modified-beam mode with dozens of terms, which can fall behind realtime on
+     * thermally throttled tablets. Explicit user hotwords still get the accuracy boost.
      */
     private fun buildAsrHotwords(): String {
         val terms = LinkedHashSet<String>()
-
-        fun add(raw: String) {
-            raw.split(HOTWORD_SPLIT).forEach { part ->
-                val clean = part
-                    .trim()
-                    .removeSuffix(".pdf")
-                    .removeSuffix(".PDF")
-                    .replace('/', ' ')
-                    .replace(Regex("\\s+"), " ")
-                    .trim()
-                if (clean.length !in 2..24) return@forEach
-                if (clean.matches(Regex("(?i)^P?\\d{1,4}$"))) return@forEach
-                if (clean.all { it.isDigit() }) return@forEach
-                terms += clean
-            }
+        app.graph.settings.hotwords.split(HOTWORD_SPLIT).forEach { part ->
+            val clean = part
+                .trim()
+                .replace('/', ' ')
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (clean.length !in 2..24) return@forEach
+            if (clean.matches(Regex("(?i)^P?\\d{1,4}$"))) return@forEach
+            if (clean.all { it.isDigit() }) return@forEach
+            terms += clean
         }
-
-        add(app.graph.settings.hotwords)
-
-        val docId = app.graph.settings.currentDocumentId
-        if (docId != null) {
-            app.graph.db.getDocument(docId)?.title?.let(::add)
-            val chunks = runCatching {
-                app.graph.db.chunksNearPage(docId, app.graph.settings.currentPage, radius = 4)
-            }.getOrDefault(emptyList())
-
-            chunks.forEach { chunk ->
-                add(chunk.title)
-                val text = chunk.text.take(12_000)
-                QUOTED_TERM.findAll(text).forEach { match -> add(match.groupValues[1]) }
-                TECH_TERM.findAll(text).forEach { match -> add(match.value) }
-            }
-        }
-
         return terms.asSequence().take(MAX_HOTWORDS).joinToString("/")
     }
 
     private fun gracefulStop() {
         if (stopping) return
         stopping = true
+        audioRestartJob?.cancel()
         audio.stop()
         partialQuestionJob?.cancel()
         ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在停止录音并收尾…") }
-        updateNotification("录音已停止 · 正在收尾最后一句")
+        scope.launch(Dispatchers.IO) { updateNotification("录音已停止 · 正在收尾最后一句") }
 
         scope.launch {
             delay(6_000L)
@@ -194,7 +232,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         val finishingSession = sessionId
         if (app.graph.settings.autoNotes && finishingSession != null) {
             ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在整理最后课堂笔记…") }
-            updateNotification("录音已结束 · 正在整理最后课堂笔记")
+            scope.launch(Dispatchers.IO) { updateNotification("录音已结束 · 正在整理最后课堂笔记") }
             val done = CompletableDeferred<Unit>()
             AutoNotePipeline(app, app.applicationScope).summarizeNow(finishingSession) { done.complete(Unit) }
             scope.launch {
@@ -214,9 +252,11 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     }
 
     override fun onDestroy() {
+        audioRestartJob?.cancel()
         audio.stop()
         partialQuestionJob?.cancel()
         asr.stop()
+        releaseCpuWakeLock()
         if (started && !stopping) {
             app.graph.settings.activeSessionId = sessionId
         }
@@ -229,6 +269,20 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun acquireCpuWakeLock() {
+        val pm = getSystemService(PowerManager::class.java)
+        val lock = wakeLock ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:ClassroomASR").also {
+            it.setReferenceCounted(false)
+            wakeLock = it
+        }
+        if (!lock.isHeld) runCatching { lock.acquire() }
+    }
+
+    private fun releaseCpuWakeLock() {
+        wakeLock?.let { lock -> if (lock.isHeld) runCatching { lock.release() } }
+        wakeLock = null
+    }
 
     private fun createChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -286,9 +340,9 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         const val ACTION_STOP = "io.github.paper.classhelper.STOP_CLASS"
         private const val CHANNEL_ID = "classhelper_listening"
         private const val NOTIFICATION_ID = 101
-        private const val MAX_HOTWORDS = 48
+        private const val MAX_HOTWORDS = 24
+        private const val AUDIO_RESTART_DELAY_MS = 700L
         private val HOTWORD_SPLIT = Regex("[\\r\\n,，;；/]+")
-        private val QUOTED_TERM = Regex("[《“「『【]([^》”」』】\\n]{2,24})[》”」』】]")
-        private val TECH_TERM = Regex("\\b[A-Z][A-Z0-9+.#_-]{1,15}\\b")
+        private const val TAG = "ClassroomService"
     }
 }
