@@ -1,0 +1,55 @@
+name: One-shot ASR stability and Chaoxing UI cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-stability-chaoxing.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply final cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          client = Path('app/src/main/java/io/github/paper/classhelper/chaoxing/ChaoxingClient.kt')
+          s = client.read_text(encoding='utf-8')
+          marker = '        val out = LinkedHashMap<String, ChaoxingCourse>()\n'
+          block = '''        // Current Chaoxing course-list HTML uses div.course with the real title in\n        // span.course-name[title]. Parse that structure first so UI never has to expose numeric IDs.\n        for (course in doc.select("div.course")) {\n            if (course.selectFirst("a.not-open-tip, div.not-open-tip") != null) continue\n            val courseId = course.selectFirst("input.courseId, input[name=courseId], input[name=courseid]")\n                ?.attr("value").orEmpty().trim()\n            val classId = course.selectFirst("input.clazzId, input[name=clazzId], input[name=classId], input[name=clazzid]")\n                ?.attr("value").orEmpty().trim()\n            if (courseId.isBlank() || classId.isBlank()) continue\n            val link = course.selectFirst("a[href*=cpi], a[href]")\n            val rawUrl = link?.absUrl("href").takeUnless { it.isNullOrBlank() } ?: link?.attr("href").orEmpty()\n            val name = course.selectFirst("span.course-name[title], span.course-name, .course-name[title], .course-name")\n                ?.let { it.attr("title").ifBlank { it.text() } }?.trim().orEmpty()\n                .ifBlank { "未命名课程" }\n            val cpi = rawUrl.toHttpUrlOrNull()?.queryParameter("cpi").orEmpty().ifBlank {\n                course.selectFirst("input[name=cpi]")?.attr("value").orEmpty()\n            }\n            val teacher = course.selectFirst("p.color3[title], .teacher[title], .teacher")?.let {\n                it.attr("title").ifBlank { it.text() }\n            }.orEmpty().trim()\n            val classroom = course.select("p,span").firstOrNull { it.text().contains("班级") }\n                ?.text()?.substringAfter("班级：", "")?.substringAfter("班级:", "")?.trim().orEmpty()\n            out["$courseId:$classId"] = ChaoxingCourse(courseId, classId, cpi, name, teacher, classroom, rawUrl)\n        }\n'''
+          if block not in s:
+              if marker not in s:
+                  raise SystemExit('Chaoxing parse marker missing')
+              s = s.replace(marker, marker + block, 1)
+          s = s.replace('.course-name[title], h3 span[title], h3 a[title], h3, h4', '.course-name[title], .course-name, h3 span[title], h3 a[title], h3, h4')
+          s = s.replace('.ifBlank { "课程 $courseId" }', '.ifBlank { "未命名课程" }')
+          client.write_text(s, encoding='utf-8')
+
+          gradle = Path('app/build.gradle.kts')
+          g = gradle.read_text(encoding='utf-8')
+          g = g.replace('versionCode = 202', 'versionCode = 203')
+          g = g.replace('versionName = "1.10.2-ui"', 'versionName = "1.10.3-stability"')
+          gradle.write_text(g, encoding='utf-8')
+
+          notes = Path('RELEASE_NOTES_CURRENT.md')
+          notes.write_text('''- 修复“语音识别突然不动但服务仍显示听课”的录音恢复问题：AudioRecord 临时异常后会正确复位 running 状态并自动重建录音器，不需要重启课堂会话。\n- Zipformer 实时性优化：自动 PDF 术语不再让每节课强制进入 modified-beam；只有手动热词启用 beam，active paths 从 4 降为 2，减少持续积压。\n- 增加 PCM 解码积压提示；积压超过约 1.5 秒时会显示“正在追赶音频”，便于区分性能积压与麦克风中断。\n- ASR final 回调只做快速交接；SQLite、问题检测和 PDF 匹配在现有单一 service scope 上有序处理，不恢复旧版多线程池架构。\n- 前台听课增加 PARTIAL_WAKE_LOCK，降低熄屏、系统省电或调度抖动造成录音/解码停顿的概率。\n- 重新设计学习通课程资源页：登录、课程选择、同步状态分区显示，所有按钮使用真实 dp 高度，修复高 DPI 平板上按钮被压成一条线。\n- 学习通课程选择器只显示课程名称；courseId/classId 仅内部保存。优先按当前 div.course / span.course-name[title] 结构读取真实课程名，解析失败时显示“未命名课程”，不再显示“课程 + 一串数字”。\n- 保留学习通账号密码加密保存、课程资源同步、低内存 PDF/OCR、无主动丢帧 PCM 环形缓冲和 Zipformer Streaming INT8。\n''', encoding='utf-8')
+          PY
+          rm -f .github/workflows/one-shot-stability-chaoxing.yml
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "fix: stabilize ASR and refine Chaoxing UI"
+          git push
