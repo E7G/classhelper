@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -49,7 +48,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private var sessionId: String? = null
     private var partialQuestionJob: Job? = null
     private var audioRestartJob: Job? = null
-    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -77,7 +75,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         started = true
         stopping = false
         finishSequenceStarted.set(false)
-        acquireCpuWakeLock()
         val active = app.graph.settings.activeSessionId
         sessionId = active?.takeIf { app.graph.db.getSession(it)?.endedAt == null } ?: run {
             val title = "课堂 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date())}"
@@ -256,7 +253,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         audio.stop()
         partialQuestionJob?.cancel()
         asr.stop()
-        releaseCpuWakeLock()
         if (started && !stopping) {
             app.graph.settings.activeSessionId = sessionId
         }
@@ -269,20 +265,6 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun acquireCpuWakeLock() {
-        val pm = getSystemService(PowerManager::class.java)
-        val lock = wakeLock ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:ClassroomASR").also {
-            it.setReferenceCounted(false)
-            wakeLock = it
-        }
-        if (!lock.isHeld) runCatching { lock.acquire() }
-    }
-
-    private fun releaseCpuWakeLock() {
-        wakeLock?.let { lock -> if (lock.isHeld) runCatching { lock.release() } }
-        wakeLock = null
-    }
 
     private fun createChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
