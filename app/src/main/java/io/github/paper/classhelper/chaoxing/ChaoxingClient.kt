@@ -60,6 +60,14 @@ class ChaoxingClient(private val settings: SettingsStore) {
     suspend fun listCourses(): List<ChaoxingCourse> = withContext(Dispatchers.IO) {
         require(ensureSession()) { "学习通登录已失效，请重新登录" }
         val merged = LinkedHashMap<String, ChaoxingCourse>()
+
+        // Prefer Chaoxing's JSON course API. It contains the canonical course title at
+        // channelList[].content.course.data[].name and is much less fragile than parsing UI HTML.
+        val json = runCatching { getText(COURSE_LIST_API) }.getOrDefault("")
+        parseCoursesJson(json).forEach { merged["${it.courseId}:${it.classId}"] = it }
+        if (merged.isNotEmpty()) return@withContext merged.values.toList()
+
+        // Compatibility fallback for accounts/regions where the JSON API is unavailable.
         val folders = linkedSetOf("0").apply { addAll(courseFolderIds()) }
         for (folder in folders) {
             val body = FormBody.Builder()
@@ -73,12 +81,16 @@ class ChaoxingClient(private val settings: SettingsStore) {
                 .post(body)
                 .build()
             val html = try { executeText(request) } catch (_: Throwable) { continue }
-            parseCourses(html).forEach { merged["${it.courseId}:${it.classId}"] = it }
+            parseCourses(html).forEach { course ->
+                merged.putIfAbsent("${course.courseId}:${course.classId}", course)
+            }
         }
 
         if (merged.isEmpty()) {
             val oldHtml = runCatching { getText(COURSE_LIST_OLD) }.getOrDefault("")
-            parseCourses(oldHtml).forEach { merged["${it.courseId}:${it.classId}"] = it }
+            parseCourses(oldHtml).forEach { course ->
+                merged.putIfAbsent("${course.courseId}:${course.classId}", course)
+            }
         }
         if (merged.isEmpty()) error("没有读取到课程；请确认课程对当前账号可见")
         merged.values.toList()
@@ -246,6 +258,57 @@ class ChaoxingClient(private val settings: SettingsStore) {
         error(lastMessage)
     }
 
+    private fun parseCoursesJson(content: String): List<ChaoxingCourse> {
+        if (content.isBlank()) return emptyList()
+        val root = runCatching { JSONObject(content) }.getOrNull() ?: return emptyList()
+        val channels = root.optJSONArray("channelList")
+            ?: root.optJSONObject("data")?.optJSONArray("channelList")
+            ?: return emptyList()
+        val out = LinkedHashMap<String, ChaoxingCourse>()
+        for (i in 0 until channels.length()) {
+            val channel = channels.optJSONObject(i) ?: continue
+            val body = channel.optJSONObject("content") ?: continue
+            val classId = body.optString("id").trim()
+                .ifBlank { channel.optString("clazzId").trim() }
+                .ifBlank { channel.optString("classId").trim() }
+            if (classId.isBlank()) continue
+            val cpi = channel.optString("cpi").trim()
+            val data = body.optJSONObject("course")?.optJSONArray("data") ?: continue
+            for (j in 0 until data.length()) {
+                val courseJson = data.optJSONObject(j) ?: continue
+                val courseId = courseJson.optString("id").trim()
+                    .ifBlank { courseJson.optString("courseId").trim() }
+                if (courseId.isBlank()) continue
+                val name = courseJson.optString("name").trim()
+                    .ifBlank { courseJson.optString("title").trim() }
+                    .ifBlank { body.optString("courseName").trim() }
+                    .ifBlank { "未命名课程" }
+                val teacher = sequenceOf("teacherfactor", "teacherName", "teacher")
+                    .map { courseJson.optString(it).trim() }
+                    .firstOrNull { it.isNotBlank() && !it.startsWith("{") && !it.startsWith("[") }
+                    .orEmpty()
+                val classroom = body.optString("name").trim().takeUnless { it == name }.orEmpty()
+                val url = "https://mooc1.chaoxing.com/visit/stucoursemiddle".toHttpUrl().newBuilder()
+                    .addQueryParameter("courseid", courseId)
+                    .addQueryParameter("clazzid", classId)
+                    .addQueryParameter("cpi", cpi)
+                    .addQueryParameter("ismooc2", "1")
+                    .addQueryParameter("v", "2")
+                    .build().toString()
+                out["$courseId:$classId"] = ChaoxingCourse(
+                    courseId = courseId,
+                    classId = classId,
+                    cpi = cpi,
+                    name = name,
+                    teacher = teacher,
+                    classroom = classroom,
+                    url = url,
+                )
+            }
+        }
+        return out.values.toList()
+    }
+
     private fun courseFolderIds(): List<String> {
         val html = runCatching { getText(COURSE_INTERACTION) }.getOrDefault("")
         val out = LinkedHashSet<String>()
@@ -261,8 +324,6 @@ class ChaoxingClient(private val settings: SettingsStore) {
         if (content.isBlank()) return emptyList()
         val doc = Jsoup.parse(content)
         val out = LinkedHashMap<String, ChaoxingCourse>()
-        // Current Chaoxing course-list HTML uses div.course with the real title in
-        // span.course-name[title]. Parse that structure first so UI never has to expose numeric IDs.
         for (course in doc.select("div.course")) {
             if (course.selectFirst("a.not-open-tip, div.not-open-tip") != null) continue
             val courseId = course.selectFirst("input.courseId, input[name=courseId], input[name=courseid]")
@@ -435,6 +496,7 @@ class ChaoxingClient(private val settings: SettingsStore) {
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/152.0 Mobile Safari/537.36 ClassHelper/1.0"
         private const val API_LOGIN = "https://passport2.chaoxing.com/fanyalogin"
         private const val API_ACCOUNT = "https://sso.chaoxing.com/apis/login/userLogin4Uname.do"
+        private const val COURSE_LIST_API = "https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1"
         private const val COURSE_LIST_DATA = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata"
         private const val COURSE_LIST_OLD = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courses/list"
         private const val COURSE_INTERACTION = "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/interaction"
