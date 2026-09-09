@@ -1,9 +1,10 @@
-- 重新实现语音识别运行架构：Zipformer native decode 使用独立高优先级线程；Listener 回调再经过独立低优先级回调线程，业务代码无法直接阻塞解码。
-- ClassroomService 把转写/SQLite、问题检索+LLM、自动笔记、PDF 页面匹配拆成彼此独立的消费者队列；ASR 只持续收音和产出 partial/final。
-- 新增 ASR watchdog：持续观察 AudioRecord 读取心跳、PCM 积压、Zipformer 解码活动；录音器中断自动重建，已就绪的解码器出现真实无进展时自动重建识别器。
-- Zipformer 解码线程优先级从低于普通线程调整为高于普通业务线程；问题、笔记、PDF 匹配线程统一降级，课堂录音识别获得最高运行优先级。
-- 保留无主动丢帧的固定 PCM 环形缓冲、240ms 批量解码、endpoint、实时 partial 和手动热词；普通课堂默认 greedy_search，只有手动热词启用较重的 modified-beam（2 paths）。
-- 优雅停止时 final transcript 先进入有序转写队列，再执行最终笔记和结束 session，避免异步化后最后一句被收尾流程抢先跳过。
-- 修复学习通课程全部显示“未命名课程”：课程列表现在优先读取 `mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1`，直接从 `channelList[].content.course.data[].name` 获取真实课程名称；HTML 仅作为兼容兜底。
-- 学习通课程 UI 继续只显示真实课程名，courseId/classId/cpi 仅内部保存；按钮均使用真实 dp 高度，保留账号密码 KeyStore 加密保存与课程资源同步。
-- 保留低内存 PDF/OCR、学习通课程知识库检索，以及问题/答案不发送额外系统通知。
+- 针对 1.10.6 出现的“疯狂遗漏、不准确、实时性变差”回归，恢复 Zipformer 的高质量识别配置，同时保留 ASR 与业务逻辑完全异步隔离。
+- 恢复课程上下文热词：手动热词优先，其次加入当前学习通课程名、当前 PDF 标题、附近页面标题、引号术语和紧凑技术词；最多 48 个上下文词参与识别偏置。
+- 恢复旧版高质量 modified-beam 配置：存在上下文热词时 maxActivePaths 从 2 恢复为 4，hotwordsScore 保持 2.0；无热词时仍使用低开销 greedy_search。
+- 移除会造成整段漏音的 Zipformer 自动重建 watchdog：不再因为“积压 >=1 秒且 8 秒无 decode 进展”就 stop/recreate 识别器，避免 stop() 清空无丢帧 PCM 环形缓冲。
+- watchdog 现在只负责 AudioRecord 录音器健康检查与自动重建；Zipformer 原生流在一节课堂中保持连续，不主动丢弃已录入音频。
+- 解码由固定 240ms 批量改为自适应 60/120/240ms：正常实时状态每 60ms 喂一次模型，降低字幕延迟；积压上升时自动切到 120/240ms 提升吞吐，不跳帧。
+- ASR Listener 回调线程从低优先级恢复为普通优先级，避免 partial 字幕在 CPU 忙时排队变旧；Zipformer native decode 仍保持独立高优先级线程。
+- endpoint 参数恢复并保持旧版验证值：2.0s / 0.75s / 18.0s，实时 partial、最终句 flush、固定 PCM 环形缓冲继续保留。
+- 转写 SQLite、问题检测+LLM、自动笔记、PDF 匹配继续运行在独立消费者队列，任何业务处理都不会回到 Zipformer native decode 线程。
+- 保留学习通真实课程名 JSON 解析、课程资源同步、低内存 PDF/OCR，以及问题/答案不发送额外系统通知。
