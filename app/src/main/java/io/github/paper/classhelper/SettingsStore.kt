@@ -60,6 +60,20 @@ class SettingsStore(context: Context) {
         get() = prefs.getLong("chaoxing_last_sync", 0L)
         set(value) = prefs.edit().putLong("chaoxing_last_sync", value).apply()
 
+    /** First-class active course. It may exist even when no PDF is open. */
+    var currentCourseId: String?
+        get() = prefs.getString("current_course_id", null)
+        set(value) = prefs.edit().putString("current_course_id", value).apply()
+
+    var currentCourseName: String
+        get() = prefs.getString("current_course_name", "")!!
+        set(value) = prefs.edit().putString("current_course_name", value.trim()).apply()
+
+    /** Aggregated/local or Chaoxing knowledge document used by classroom retrieval. */
+    var currentCourseKnowledgeDocumentId: String?
+        get() = prefs.getString("current_course_knowledge_document_id", null)
+        set(value) = prefs.edit().putString("current_course_knowledge_document_id", value).apply()
+
     var autoNotes: Boolean
         get() = prefs.getBoolean("auto_notes", true)
         set(value) = prefs.edit().putBoolean("auto_notes", value).apply()
