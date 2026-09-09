@@ -3,26 +3,24 @@ package io.github.paper.classhelper.classroom
 import android.content.Context
 import io.github.paper.classhelper.ClassHelperApp
 import io.github.paper.classhelper.llm.LlmClient
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
- * High-priority question lane. Questions are not discarded when the teacher asks
- * several in a row. The newest answer owns the preview; older jobs can still
- * finish quietly and are persisted to history.
+ * Isolated question lane. The caller supplies a dedicated dispatcher, so retrieval and prompt
+ * preparation can never borrow the Zipformer decoder thread or the transcript event lane.
  */
 class QuestionPipeline(
     private val context: Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
 ) {
     private val app = context.applicationContext as ClassHelperApp
     private val sequence = AtomicLong(0)
 
     fun answer(question: String, sessionId: String? = app.graph.settings.activeSessionId) {
         val seq = sequence.incrementAndGet()
-        scope.launch(Dispatchers.Default) {
+        scope.launch {
             val settings = app.graph.settings
             val db = app.graph.db
             val contextHits = app.graph.knowledge.retrieve(
@@ -55,8 +53,8 @@ class QuestionPipeline(
                 val answer = app.graph.llm.stream(
                     listOf(
                         LlmClient.Message("system", "你是课堂实时助理。回答要快、准、短，并把课程资料与一般知识清楚区分。"),
-                        LlmClient.Message("user", prompt)
-                    )
+                        LlmClient.Message("user", prompt),
+                    ),
                 ) { delta ->
                     own.append(delta)
                     if (seq == sequence.get()) {
@@ -66,8 +64,10 @@ class QuestionPipeline(
                 db.addQuestion(question, answer, sessionId, contextHits.joinToString(" | ") { it.label })
                 ClassroomBus.update { state ->
                     if (seq == sequence.get()) state.copy(
-                        lastQuestion = question, answer = answer, answerStreaming = false,
-                        historyVersion = state.historyVersion + 1
+                        lastQuestion = question,
+                        answer = answer,
+                        answerStreaming = false,
+                        historyVersion = state.historyVersion + 1,
                     ) else state.copy(historyVersion = state.historyVersion + 1)
                 }
             } catch (t: Throwable) {
@@ -75,12 +75,13 @@ class QuestionPipeline(
                 db.addQuestion(question, error, sessionId, contextHits.joinToString(" | ") { it.label })
                 ClassroomBus.update { state ->
                     if (seq == sequence.get()) state.copy(
-                        lastQuestion = question, answer = error, answerStreaming = false,
-                        historyVersion = state.historyVersion + 1
+                        lastQuestion = question,
+                        answer = error,
+                        answerStreaming = false,
+                        historyVersion = state.historyVersion + 1,
                     ) else state.copy(historyVersion = state.historyVersion + 1)
                 }
             }
         }
     }
-
 }
