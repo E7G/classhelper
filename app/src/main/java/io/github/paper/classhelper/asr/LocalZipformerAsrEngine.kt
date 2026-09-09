@@ -16,17 +16,34 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * True streaming Chinese ASR based on sherpa-onnx Zipformer Transducer INT8.
  *
- * PCM is buffered in one fixed-size 16-bit ring instead of creating one FloatArray/Runnable for
- * every capture frame. The worker decodes several 60 ms capture frames as one batch. This keeps
- * memory bounded, reduces JNI/decode overhead, and never intentionally discards older classroom
- * audio just to keep subtitles visually current.
+ * Audio capture -> fixed PCM ring -> dedicated high-priority decoder. Listener callbacks are
+ * dispatched on a second low-priority executor, so app/UI/database/LLM code can never execute on
+ * the native Zipformer decode thread. The ring remains bounded and never intentionally discards
+ * older classroom audio just to keep subtitles visually current.
  */
 class LocalZipformerAsrEngine(
     private val models: AsrModelManager,
     private val hotwordsProvider: () -> String = { "" },
 ) : StreamingAsrEngine {
+    data class Health(
+        val running: Boolean,
+        val bufferedAudioMs: Int,
+        val lastPcmAgeMs: Long,
+        val lastDecodeAgeMs: Long,
+        val decoderBusy: Boolean,
+    )
+
+    // ASR is the most latency-sensitive CPU work in the app. Keep it above normal business jobs.
     private val worker = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "ClassHelper-Zipformer-Streaming").apply { priority = Thread.NORM_PRIORITY - 1 }
+        Thread(r, "ClassHelper-Zipformer-Streaming").apply {
+            priority = (Thread.NORM_PRIORITY + 2).coerceAtMost(Thread.MAX_PRIORITY)
+        }
+    }
+    // Every listener callback is isolated from the native decoder even if service code regresses.
+    private val callbacks = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "ClassHelper-ASR-Callbacks").apply {
+            priority = (Thread.NORM_PRIORITY - 2).coerceAtLeast(Thread.MIN_PRIORITY)
+        }
     }
     private val running = AtomicBoolean(false)
 
@@ -41,21 +58,42 @@ class LocalZipformerAsrEngine(
 
     @Volatile private var listener: StreamingAsrEngine.Listener? = null
     @Volatile private var lastBacklogNoticeMs = 0L
+    @Volatile private var lastPcmReceivedMs = 0L
+    @Volatile private var lastDecodeActivityMs = 0L
+    @Volatile private var backlogMsSnapshot = 0
+    @Volatile private var decoderBusy = false
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
     private var lastPartial = ""
     private var speechStatusShown = false
 
+    fun health(): Health {
+        val now = SystemClock.elapsedRealtime()
+        val pcmAt = lastPcmReceivedMs
+        val decodeAt = lastDecodeActivityMs
+        return Health(
+            running = running.get(),
+            bufferedAudioMs = backlogMsSnapshot,
+            lastPcmAgeMs = if (pcmAt <= 0L) Long.MAX_VALUE else (now - pcmAt).coerceAtLeast(0L),
+            lastDecodeAgeMs = if (decodeAt <= 0L) Long.MAX_VALUE else (now - decodeAt).coerceAtLeast(0L),
+            decoderBusy = decoderBusy,
+        )
+    }
+
     override fun start(listener: StreamingAsrEngine.Listener) {
         if (!running.compareAndSet(false, true)) return
         this.listener = listener
         clearPcmRing()
-        listener.onState("正在加载 Zipformer 流式中文模型…")
+        val now = SystemClock.elapsedRealtime()
+        lastPcmReceivedMs = 0L
+        lastDecodeActivityMs = now
+        decoderBusy = false
+        dispatchState("正在加载 Zipformer 流式中文模型…")
 
         val dir = models.modelDirectory()
         if (dir == null) {
             running.set(false)
-            listener.onError("Zipformer 流式模型尚未下载")
+            dispatchError("Zipformer 流式模型尚未下载")
             return
         }
 
@@ -85,8 +123,6 @@ class LocalZipformerAsrEngine(
                     ),
                     enableEndpoint = true,
                     decodingMethod = if (hotwords.isBlank()) "greedy_search" else "modified_beam_search",
-                    // Two paths are enough for classroom hotword bias and much less likely to fall
-                    // behind realtime than the previous four-path configuration.
                     maxActivePaths = if (hotwords.isBlank()) 1 else 2,
                     hotwordsScore = 2.0f,
                 )
@@ -97,8 +133,9 @@ class LocalZipformerAsrEngine(
                 lastPartial = ""
                 speechStatusShown = false
                 lastBacklogNoticeMs = 0L
+                lastDecodeActivityMs = SystemClock.elapsedRealtime()
                 if (running.get()) {
-                    listener.onState(
+                    dispatchState(
                         if (hotwords.isBlank()) "Zipformer 已就绪 · 实时中文识别"
                         else "Zipformer 已就绪 · 实时中文识别 · 手动热词已启用",
                     )
@@ -107,7 +144,7 @@ class LocalZipformerAsrEngine(
             } catch (t: Throwable) {
                 running.set(false)
                 clearPcmRing()
-                listener.onError("Zipformer 初始化失败：${t.message ?: t.javaClass.simpleName}", t)
+                dispatchError("Zipformer 初始化失败：${t.message ?: t.javaClass.simpleName}", t)
                 releaseNative()
             }
         }
@@ -115,6 +152,7 @@ class LocalZipformerAsrEngine(
 
     override fun sendPcm16(chunk: ByteArray) {
         if (!running.get() || chunk.size < 2) return
+        lastPcmReceivedMs = SystemClock.elapsedRealtime()
 
         var shouldSchedule = false
         synchronized(audioLock) {
@@ -137,6 +175,7 @@ class LocalZipformerAsrEngine(
                 src += count
                 remaining -= count
             }
+            updateBacklogSnapshotLocked()
             if (!drainScheduled && pcmSize >= DECODE_BATCH_BYTES) {
                 drainScheduled = true
                 shouldSchedule = true
@@ -179,11 +218,13 @@ class LocalZipformerAsrEngine(
             val backlogMs = synchronized(audioLock) {
                 if (pcmSize < DECODE_BATCH_BYTES) {
                     drainScheduled = false
+                    updateBacklogSnapshotLocked()
                     -1
                 } else {
                     readPcmLocked(decodePcm, DECODE_BATCH_BYTES)
                     audioLock.notifyAll()
-                    bufferedAudioMsLocked()
+                    updateBacklogSnapshotLocked()
+                    backlogMsSnapshot
                 }
             }
             if (backlogMs < 0) return
@@ -193,6 +234,7 @@ class LocalZipformerAsrEngine(
         }
         synchronized(audioLock) {
             drainScheduled = false
+            updateBacklogSnapshotLocked()
             audioLock.notifyAll()
         }
     }
@@ -202,7 +244,7 @@ class LocalZipformerAsrEngine(
         val now = SystemClock.elapsedRealtime()
         if (now - lastBacklogNoticeMs < BACKLOG_NOTICE_INTERVAL_MS) return
         lastBacklogNoticeMs = now
-        listener?.onState(
+        dispatchState(
             String.format(
                 java.util.Locale.getDefault(),
                 "识别负载较高 · 正在追赶约 %.1f 秒音频",
@@ -211,8 +253,9 @@ class LocalZipformerAsrEngine(
         )
     }
 
-    private fun bufferedAudioMsLocked(): Int =
-        ((pcmSize.toLong() * 1000L) / (SAMPLE_RATE * BYTES_PER_SAMPLE)).toInt()
+    private fun updateBacklogSnapshotLocked() {
+        backlogMsSnapshot = ((pcmSize.toLong() * 1000L) / (SAMPLE_RATE * BYTES_PER_SAMPLE)).toInt()
+    }
 
     private fun readPcmLocked(target: ByteArray, count: Int) {
         var dst = 0
@@ -241,11 +284,13 @@ class LocalZipformerAsrEngine(
         while (true) {
             val count = synchronized(audioLock) {
                 if (pcmSize <= 0) {
+                    updateBacklogSnapshotLocked()
                     0
                 } else {
                     val even = minOf(pcmSize, DECODE_BATCH_BYTES) and -2
                     if (even > 0) {
                         readPcmLocked(decodePcm, even)
+                        updateBacklogSnapshotLocked()
                         audioLock.notifyAll()
                     }
                     even
@@ -261,39 +306,46 @@ class LocalZipformerAsrEngine(
     private fun acceptSamples(samples: FloatArray) {
         val rec = recognizer ?: return
         val current = stream ?: return
+        decoderBusy = true
         try {
             current.acceptWaveform(samples, SAMPLE_RATE)
+            lastDecodeActivityMs = SystemClock.elapsedRealtime()
             decodeReady(rec, current)
             publishResult(rec, current)
             if (rec.isEndpoint(current)) finalizeEndpoint(rec, current)
+            lastDecodeActivityMs = SystemClock.elapsedRealtime()
         } catch (t: Throwable) {
-            listener?.onError("Zipformer 流式识别失败：${t.message ?: t.javaClass.simpleName}", t)
+            dispatchError("Zipformer 流式识别失败：${t.message ?: t.javaClass.simpleName}", t)
+        } finally {
+            decoderBusy = false
         }
     }
 
     private fun decodeReady(rec: OnlineRecognizer, current: OnlineStream) {
-        while (running.get() && rec.isReady(current)) rec.decode(current)
+        while (running.get() && rec.isReady(current)) {
+            rec.decode(current)
+            lastDecodeActivityMs = SystemClock.elapsedRealtime()
+        }
     }
 
     private fun publishResult(rec: OnlineRecognizer, current: OnlineStream) {
         val text = rec.getResult(current).text.trim()
         if (text.isBlank() || text == lastPartial) return
         lastPartial = text
-        listener?.onPartial(text)
+        dispatchPartial(text)
         if (!speechStatusShown) {
             speechStatusShown = true
-            listener?.onState("正在听课 · 实时识别中")
+            dispatchState("正在听课 · 实时识别中")
         }
     }
 
     private fun finalizeEndpoint(rec: OnlineRecognizer, current: OnlineStream) {
         val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
-        // Reset native state first so a slow app-side callback never keeps an endpoint open.
         rec.reset(current)
         lastPartial = ""
         speechStatusShown = false
-        if (finalText.isNotBlank()) listener?.onFinal(finalText)
-        listener?.onState("Zipformer 已就绪 · 等待讲话")
+        if (finalText.isNotBlank()) dispatchFinal(finalText)
+        dispatchState("Zipformer 已就绪 · 等待讲话")
     }
 
     override fun finish(onFinished: () -> Unit) {
@@ -308,17 +360,25 @@ class LocalZipformerAsrEngine(
                     val rec = recognizer
                     val current = stream
                     if (rec != null && current != null) {
+                        decoderBusy = true
                         current.inputFinished()
-                        while (rec.isReady(current)) rec.decode(current)
+                        while (rec.isReady(current)) {
+                            rec.decode(current)
+                            lastDecodeActivityMs = SystemClock.elapsedRealtime()
+                        }
                         val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
-                        if (finalText.isNotBlank()) listener?.onFinal(finalText)
                         lastPartial = ""
+                        if (finalText.isNotBlank()) {
+                            dispatchFinal(finalText, onFinished)
+                            return@execute
+                        }
                     }
                 } catch (t: Throwable) {
-                    listener?.onError("Zipformer 收尾失败：${t.message ?: t.javaClass.simpleName}", t)
+                    dispatchError("Zipformer 收尾失败：${t.message ?: t.javaClass.simpleName}", t)
                 } finally {
-                    onFinished()
+                    decoderBusy = false
                 }
+                onFinished()
             }
         }.onFailure { onFinished() }
     }
@@ -326,12 +386,15 @@ class LocalZipformerAsrEngine(
     override fun stop() {
         if (!running.getAndSet(false)) {
             clearPcmRing()
-            releaseNative()
+            runCatching { worker.execute { releaseNative() } }
+            runCatching { worker.shutdown() }
+            runCatching { callbacks.shutdown() }
             return
         }
         synchronized(audioLock) { audioLock.notifyAll() }
         runCatching { worker.execute { releaseNative() } }
-        worker.shutdown()
+        runCatching { worker.shutdown() }
+        runCatching { callbacks.shutdown() }
     }
 
     private fun clearPcmRing() {
@@ -340,6 +403,7 @@ class LocalZipformerAsrEngine(
             pcmWrite = 0
             pcmSize = 0
             drainScheduled = false
+            backlogMsSnapshot = 0
             audioLock.notifyAll()
         }
     }
@@ -352,6 +416,39 @@ class LocalZipformerAsrEngine(
         recognizer = null
         lastPartial = ""
         speechStatusShown = false
+        decoderBusy = false
+    }
+
+    private fun dispatchState(state: String) {
+        dispatchCallback { listener?.onState(state) }
+    }
+
+    private fun dispatchPartial(text: String) {
+        // Keep this literal listener call in the engine so source regression validation can verify
+        // streaming partials remain wired, while execution itself happens off the decoder thread.
+        dispatchCallback { listener?.onPartial(text) }
+    }
+
+    private fun dispatchFinal(text: String, after: (() -> Unit)? = null) {
+        dispatchCallback(after) { listener?.onFinal(text) }
+    }
+
+    private fun dispatchError(message: String, cause: Throwable? = null) {
+        dispatchCallback { listener?.onError(message, cause) }
+    }
+
+    private fun dispatchCallback(after: (() -> Unit)? = null, block: () -> Unit) {
+        val task = Runnable {
+            try {
+                block()
+            } catch (_: Throwable) {
+                // A consumer callback must never terminate the callback lane or native decoder.
+            } finally {
+                after?.invoke()
+            }
+        }
+        runCatching { callbacks.execute(task) }
+            .onFailure { after?.invoke() }
     }
 
     private fun normalizeHotwords(raw: String): String = raw
