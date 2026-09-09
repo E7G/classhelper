@@ -1,10 +1,10 @@
-- 针对 1.10.6 出现的“疯狂遗漏、不准确、实时性变差”回归，恢复 Zipformer 的高质量识别配置，同时保留 ASR 与业务逻辑完全异步隔离。
-- 恢复课程上下文热词：手动热词优先，其次加入当前学习通课程名、当前 PDF 标题、附近页面标题、引号术语和紧凑技术词；最多 48 个上下文词参与识别偏置。
-- 恢复旧版高质量 modified-beam 配置：存在上下文热词时 maxActivePaths 从 2 恢复为 4，hotwordsScore 保持 2.0；无热词时仍使用低开销 greedy_search。
-- 移除会造成整段漏音的 Zipformer 自动重建 watchdog：不再因为“积压 >=1 秒且 8 秒无 decode 进展”就 stop/recreate 识别器，避免 stop() 清空无丢帧 PCM 环形缓冲。
-- watchdog 现在只负责 AudioRecord 录音器健康检查与自动重建；Zipformer 原生流在一节课堂中保持连续，不主动丢弃已录入音频。
-- 解码由固定 240ms 批量改为自适应 60/120/240ms：正常实时状态每 60ms 喂一次模型，降低字幕延迟；积压上升时自动切到 120/240ms 提升吞吐，不跳帧。
-- ASR Listener 回调线程从低优先级恢复为普通优先级，避免 partial 字幕在 CPU 忙时排队变旧；Zipformer native decode 仍保持独立高优先级线程。
-- endpoint 参数恢复并保持旧版验证值：2.0s / 0.75s / 18.0s，实时 partial、最终句 flush、固定 PCM 环形缓冲继续保留。
-- 转写 SQLite、问题检测+LLM、自动笔记、PDF 匹配继续运行在独立消费者队列，任何业务处理都不会回到 Zipformer native decode 线程。
-- 保留学习通真实课程名 JSON 解析、课程资源同步、低内存 PDF/OCR，以及问题/答案不发送额外系统通知。
+- 基于 1.10.7 的高质量 Zipformer 识别配置，新增“思考停顿门”：识别到疑似问题后，不再立刻调用问题检索/LLM。
+- partial 阶段完全取消问题检测，只负责实时字幕；老师继续快速讲话时不会创建问题处理任务。
+- final 文本先经过轻量问题信号预筛，普通陈述句不会进入停顿等待，进一步减少问题检测开销。
+- 疑似问题在 final 后额外等待 1.2 秒；Zipformer endpoint 本身已有约 0.75 秒尾部静音，因此实际需要接近 2 秒的停顿才会确认成课堂思考题。
+- 等待期间只要出现新的 partial 或 final，立即取消候选问题；老师问完马上继续解释时，该句不再触发 LLM。
+- 使用 speechRevision 双重校验，避免取消任务与新语音同时到达时的竞态误触发。
+- 只有“像问题 + 老师确实停顿留思考时间”的内容才进入 QuestionDetector 的完整评分和 QuestionPipeline。
+- 保留 1.10.7 的 4-path modified beam、课程/PDF 上下文热词、自适应 60/120/240ms 喂流、无主动丢帧 PCM 环形缓冲和 ASR/业务异步隔离。
+- watchdog 仍只恢复 AudioRecord，不会中途 stop/recreate Zipformer，不清空已缓存课堂音频。
+- 保留学习通真实课程名、课程资源同步、低内存 PDF/OCR，以及问题/答案不发送额外系统通知。
