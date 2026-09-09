@@ -8,8 +8,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * Isolated question lane. The caller supplies a dedicated dispatcher, so retrieval and prompt
- * preparation can never borrow the Zipformer decoder thread or the transcript event lane.
+ * Isolated question lane. Retrieval follows the active course first; the currently open PDF is an
+ * optional stronger local context, not the definition of the course itself.
  */
 class QuestionPipeline(
     private val context: Context,
@@ -23,17 +23,20 @@ class QuestionPipeline(
         scope.launch {
             val settings = app.graph.settings
             val db = app.graph.db
+            val preferredCourseDocument = settings.currentCourseKnowledgeDocumentId
+                ?: settings.chaoxingCourseDocumentId
             val contextHits = app.graph.knowledge.retrieve(
                 question = question,
                 currentDocumentId = settings.currentDocumentId,
                 currentPage = settings.currentPage,
-                preferredDocumentId = settings.chaoxingCourseDocumentId,
+                preferredDocumentId = preferredCourseDocument,
             )
             val recentLecture = db.recentTranscripts(16, sessionId).joinToString("\n") { it.text }.takeLast(6_000)
             val evidence = contextHits.joinToString("\n\n") { "[${it.label}]\n${it.text}" }
+            val activeCourseName = settings.currentCourseName.ifBlank { settings.chaoxingCourseName }
             val prompt = buildString {
                 appendLine("老师刚刚提出的问题：$question")
-                if (settings.chaoxingCourseName.isNotBlank()) appendLine("当前绑定学习通课程：${settings.chaoxingCourseName}")
+                if (activeCourseName.isNotBlank()) appendLine("当前课程：$activeCourseName")
                 if (recentLecture.isNotBlank()) {
                     appendLine("\n最近课堂上下文：")
                     appendLine(recentLecture)
@@ -43,7 +46,7 @@ class QuestionPipeline(
                     appendLine(evidence)
                 }
                 appendLine("\n请给学生一个课堂快速参考答案。第一行先直接回答，随后最多用3个短要点解释。")
-                appendLine("课程资料足以支撑时优先依据当前学习通课程/PDF；资料不足时明确写‘根据一般知识补充’。不要编造页码或资料出处。")
+                appendLine("课程资料足以支撑时优先依据当前课程/PDF；资料不足时明确写‘根据一般知识补充’。不要编造页码或资料出处。")
             }
             if (seq == sequence.get()) {
                 ClassroomBus.update { it.copy(lastQuestion = question, answer = "", answerStreaming = true) }
