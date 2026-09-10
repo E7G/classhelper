@@ -3,15 +3,11 @@ package io.github.paper.classhelper.ui
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
-import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
@@ -20,27 +16,22 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import io.github.paper.classhelper.ClassHelperApp
-import io.github.paper.classhelper.chaoxing.ChaoxingChapter
 import io.github.paper.classhelper.chaoxing.ChaoxingClient
 import io.github.paper.classhelper.chaoxing.ChaoxingCourse
 import io.github.paper.classhelper.chaoxing.ChaoxingMaterial
 import io.github.paper.classhelper.chaoxing.ChaoxingMaterialRepository
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-/** Browse authorized Chaoxing attachments without changing the app's PDF-first data model. */
+/** Browse all authorized Chaoxing course materials as one flat preview list. */
 class ChaoxingMaterialsActivity : AppCompatActivity() {
     private lateinit var app: ClassHelperApp
     private lateinit var client: ChaoxingClient
     private lateinit var repository: ChaoxingMaterialRepository
     private lateinit var course: ChaoxingCourse
-    private lateinit var chapterSpinner: Spinner
     private lateinit var materialsBody: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var progress: LinearProgressIndicator
     private lateinit var refreshButton: MaterialButton
-    private var chapters: List<ChaoxingChapter> = emptyList()
-    private var loadJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,85 +43,52 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
             return
         }
         setContentView(buildContent())
-        wireActions()
-        lifecycleScope.launch { loadChapters() }
+        refreshButton.setOnClickListener { lifecycleScope.launch { loadAllMaterials() } }
+        lifecycleScope.launch { loadAllMaterials() }
     }
 
-    override fun onDestroy() {
-        loadJob?.cancel()
-        super.onDestroy()
-    }
-
-    private fun wireActions() {
-        refreshButton.setOnClickListener { lifecycleScope.launch { loadChapters() } }
-        chapterSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val chapter = chapters.getOrNull(position) ?: return
-                loadJob?.cancel()
-                loadJob = lifecycleScope.launch { loadChapterMaterials(chapter) }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-        }
-    }
-
-    private suspend fun loadChapters() {
-        setBusy(true, "正在读取《${course.name}》章节…")
-        runCatching {
-            require(client.ensureSession()) { "学习通登录已失效，请重新登录" }
-            client.listChapters(course)
-        }.onSuccess { loaded ->
-            chapters = loaded
-            val labels = if (loaded.isEmpty()) listOf("暂无章节") else loaded.map { chapter ->
-                val indent = "　".repeat(chapter.depth.coerceIn(0, 4))
-                indent + chapter.title
-            }
-            chapterSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).apply {
-                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-            }
-            chapterSpinner.isEnabled = loaded.isNotEmpty()
-            if (loaded.isEmpty()) {
-                materialsBody.removeAllViews()
-                setBusy(false, "没有读取到可浏览章节")
-            } else {
-                chapterSpinner.setSelection(0)
-                setBusy(false, "已读取 ${loaded.size} 个章节 · 选择章节查看资料")
-            }
-        }.onFailure {
-            chapters = emptyList()
-            chapterSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, listOf("读取失败"))
-            chapterSpinner.isEnabled = false
-            materialsBody.removeAllViews()
-            setBusy(false, "章节读取失败：${it.message ?: it.javaClass.simpleName}")
-        }
-    }
-
-    private suspend fun loadChapterMaterials(chapter: ChaoxingChapter) {
-        setBusy(true, "正在读取《${chapter.title}》资料…")
+    private suspend fun loadAllMaterials() {
+        setBusy(true, "正在汇总《${course.name}》全部资料…")
         materialsBody.removeAllViews()
-        runCatching { repository.listMaterials(client, course, chapter) }
-            .onSuccess { materials ->
-                renderMaterials(materials)
-                setBusy(false, if (materials.isEmpty()) "本章没有检测到可打开附件" else "本章共 ${materials.size} 个资料")
+        runCatching {
+            repository.listCourseMaterials(client, course) { done, total, chapterTitle ->
+                runOnUiThread {
+                    statusText.text = if (total > 0) {
+                        "正在汇总资料 $done/$total · $chapterTitle"
+                    } else {
+                        "正在读取课程资料…"
+                    }
+                }
             }
-            .onFailure {
-                setBusy(false, "资料读取失败：${it.message ?: it.javaClass.simpleName}")
-            }
+        }.onSuccess { materials ->
+            renderMaterials(materials)
+            setBusy(
+                false,
+                if (materials.isEmpty()) "这门课程暂时没有检测到可预览资料" else "共 ${materials.size} 个资料 · 点击卡片或“预览”打开",
+            )
+        }.onFailure {
+            materialsBody.removeAllViews()
+            setBusy(false, "课程资料读取失败：${it.message ?: it.javaClass.simpleName}")
+        }
     }
 
     private fun renderMaterials(materials: List<ChaoxingMaterial>) {
         materialsBody.removeAllViews()
         if (materials.isEmpty()) {
             materialsBody.addView(TextView(this).apply {
-                text = "这个章节暂时没有检测到附件。"
+                text = "这门课程暂时没有检测到附件。"
                 textSize = 13f
                 setPadding(dp(4), dp(20), dp(4), dp(20))
             })
             return
         }
+
         materials.forEachIndexed { index, material ->
             val card = MaterialCardView(this).apply {
                 radius = dp(22).toFloat()
                 cardElevation = 0f
+                isClickable = true
+                isFocusable = true
             }
             val body = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -144,6 +102,7 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
             body.addView(TextView(this).apply {
                 text = buildString {
                     append(material.type.ifBlank { "资料" })
+                    if (material.chapterTitle.isNotBlank()) append(" · 来源：${material.chapterTitle}")
                     if (!material.objectId.isNullOrBlank()) append(" · 可解析")
                     else if (!material.directUrl.isNullOrBlank()) append(" · 在线资源")
                     else append(" · 暂无直达地址")
@@ -151,8 +110,8 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
                 textSize = 12f
                 setPadding(0, dp(5), 0, dp(10))
             })
-            val open = MaterialButton(this).apply {
-                text = "查看资料"
+            val preview = MaterialButton(this).apply {
+                text = "预览"
                 isAllCaps = false
                 minHeight = 0
                 insetTop = 0
@@ -160,32 +119,38 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
                 isEnabled = material.objectId != null || material.directUrl != null
                 setOnClickListener { openMaterial(material, this) }
             }
-            body.addView(open, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)))
+            body.addView(preview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)))
             card.addView(body)
-            materialsBody.addView(card, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = if (index == 0) dp(10) else dp(8)
-            })
+            card.setOnClickListener {
+                if (preview.isEnabled) preview.performClick()
+            }
+            materialsBody.addView(
+                card,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = if (index == 0) dp(10) else dp(8)
+                },
+            )
         }
     }
 
     private fun openMaterial(material: ChaoxingMaterial, button: MaterialButton) {
         lifecycleScope.launch {
             button.isEnabled = false
-            setBusy(true, "正在解析《${material.name}》…")
+            setBusy(true, "正在准备预览《${material.name}》…")
             runCatching { repository.resolve(client, material) }
                 .onSuccess { resolved ->
                     val pdfUrl = resolved.pdfUrl
                     if (!pdfUrl.isNullOrBlank()) {
-                        setBusy(true, "正在准备 PDF：${material.name}")
+                        setBusy(true, "正在准备 PDF 预览：${material.name}")
                         runCatching {
                             repository.cachePdf(course, material, pdfUrl) { downloaded, total ->
                                 runOnUiThread {
                                     val doneMb = downloaded / 1024f / 1024f
                                     statusText.text = if (total != null && total > 0) {
                                         val totalMb = total / 1024f / 1024f
-                                        "正在下载 PDF · %.1f / %.1f MB".format(doneMb, totalMb)
+                                        "正在下载预览 · %.1f / %.1f MB".format(doneMb, totalMb)
                                     } else {
-                                        "正在下载 PDF · %.1f MB".format(doneMb)
+                                        "正在下载预览 · %.1f MB".format(doneMb)
                                     }
                                 }
                             }
@@ -195,23 +160,23 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
                                 .setAction(Intent.ACTION_VIEW)
                                 .setDataAndType(uri, "application/pdf")
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                            setBusy(false, "已打开 PDF：${material.name}")
+                            setBusy(false, "正在预览 PDF：${material.name}")
                             startActivity(intent)
                         }.onFailure {
-                            setBusy(false, "PDF 打开失败：${it.message ?: it.javaClass.simpleName}")
+                            setBusy(false, "PDF 预览失败：${it.message ?: it.javaClass.simpleName}")
                         }
                     } else {
                         val url = resolved.sourceUrl ?: material.directUrl
                         if (url.isNullOrBlank()) {
-                            setBusy(false, "这个资料没有可打开地址")
+                            setBusy(false, "这个资料没有可预览地址")
                         } else {
-                            setBusy(false, "正在打开：${material.name}")
+                            setBusy(false, "正在打开预览：${material.name}")
                             startActivity(ChaoxingWebActivity.intentFor(this@ChaoxingMaterialsActivity, url, material.name))
                         }
                     }
                 }
-                .onFailure { setBusy(false, "资料解析失败：${it.message ?: it.javaClass.simpleName}") }
-            button.isEnabled = true
+                .onFailure { setBusy(false, "资料预览解析失败：${it.message ?: it.javaClass.simpleName}") }
+            button.isEnabled = material.objectId != null || material.directUrl != null
         }
     }
 
@@ -219,7 +184,6 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
         progress.visibility = if (busy) View.VISIBLE else View.GONE
         progress.isIndeterminate = busy
         refreshButton.isEnabled = !busy
-        chapterSpinner.isEnabled = !busy && chapters.isNotEmpty()
         statusText.text = message
     }
 
@@ -258,15 +222,13 @@ class ChaoxingMaterialsActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         body.addView(TextView(this).apply {
-            text = "PDF 会直接用课堂助手阅读器打开；其他资料使用保留学习通登录态的内置网页查看。"
+            text = "整门课程的资料会汇总成一个列表，不再按章节筛选。直接点击资料卡片或“预览”；PDF 用课堂助手阅读器打开，其他在线资料交给系统浏览器/对应应用。"
             textSize = 13f
             setPadding(0, dp(7), 0, dp(12))
         })
 
-        chapterSpinner = Spinner(this).apply { minimumHeight = dp(56) }
-        body.addView(chapterSpinner, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
-        refreshButton = outlined("刷新章节")
-        body.addView(refreshButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)).apply { topMargin = dp(8) })
+        refreshButton = outlined("刷新全部资料")
+        body.addView(refreshButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)))
         progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             isIndeterminate = true

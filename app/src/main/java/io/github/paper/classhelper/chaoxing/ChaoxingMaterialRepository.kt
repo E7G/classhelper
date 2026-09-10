@@ -33,12 +33,41 @@ class ChaoxingMaterialRepository(
         .followSslRedirects(true)
         .build()
 
+    /**
+     * Scan all chapters and return one flat, de-duplicated material list in course order.
+     * Chapter information is kept only as lightweight source metadata; callers do not need to group by it.
+     */
+    suspend fun listCourseMaterials(
+        client: ChaoxingClient,
+        course: ChaoxingCourse,
+        onProgress: (done: Int, total: Int, chapterTitle: String) -> Unit = { _, _, _ -> },
+    ): List<ChaoxingMaterial> = withContext(Dispatchers.IO) {
+        require(client.ensureSession()) { "学习通登录已失效，请重新登录" }
+        val chapters = client.listChapters(course)
+        val merged = LinkedHashMap<String, ChaoxingMaterial>()
+        chapters.forEachIndexed { index, chapter ->
+            onProgress(index + 1, chapters.size, chapter.title)
+            readChapterMaterials(client, course, chapter).forEach { material ->
+                merged.putIfAbsent(materialIdentity(material), material)
+            }
+        }
+        merged.values.toList()
+    }
+
     suspend fun listMaterials(
         client: ChaoxingClient,
         course: ChaoxingCourse,
         chapter: ChaoxingChapter,
     ): List<ChaoxingMaterial> = withContext(Dispatchers.IO) {
         require(client.ensureSession()) { "学习通登录已失效，请重新登录" }
+        readChapterMaterials(client, course, chapter)
+    }
+
+    private suspend fun readChapterMaterials(
+        client: ChaoxingClient,
+        course: ChaoxingCourse,
+        chapter: ChaoxingChapter,
+    ): List<ChaoxingMaterial> {
         val out = LinkedHashMap<String, ChaoxingMaterial>()
         val count = client.cardCount(course, chapter)
         for (page in 0 until count) {
@@ -65,21 +94,26 @@ class ChaoxingMaterialRepository(
                     attachment.optString("url"),
                     attachment.optString("downloadUrl"),
                 ).map { it.trim() }.firstOrNull { it.startsWith("http://") || it.startsWith("https://") }
-                val key = objectId ?: "$name|${directUrl.orEmpty()}|$page|$i"
-                out.putIfAbsent(
-                    key,
-                    ChaoxingMaterial(
-                        chapterTitle = chapter.title,
-                        name = name,
-                        type = type,
-                        objectId = objectId,
-                        directUrl = directUrl,
-                    ),
+                val material = ChaoxingMaterial(
+                    chapterTitle = chapter.title,
+                    name = name,
+                    type = type,
+                    objectId = objectId,
+                    directUrl = directUrl,
                 )
+                val key = objectId?.let { "id:$it" }
+                    ?: directUrl?.let { "url:${name.lowercase()}|$it" }
+                    ?: "local:${chapter.title}|$name|$page|$i"
+                out.putIfAbsent(key, material)
             }
         }
-        out.values.toList()
+        return out.values.toList()
     }
+
+    private fun materialIdentity(material: ChaoxingMaterial): String =
+        material.objectId?.let { "id:$it" }
+            ?: material.directUrl?.let { "url:${material.name.trim().lowercase()}|$it" }
+            ?: "fallback:${material.chapterTitle}|${material.name}|${material.type}"
 
     suspend fun resolve(
         client: ChaoxingClient,
