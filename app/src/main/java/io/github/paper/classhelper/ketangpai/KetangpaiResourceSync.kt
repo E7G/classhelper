@@ -28,11 +28,12 @@ class KetangpaiResourceSync(
     suspend fun sync(
         client: KetangpaiClient,
         course: KetangpaiCourse,
+        resourcesOverride: List<KetangpaiResource>? = null,
         onProgress: (String) -> Unit = {},
     ): KetangpaiSyncResult = withContext(Dispatchers.IO) {
         require(client.ensureSession()) { "课堂派登录已失效，请重新登录" }
         onProgress("正在读取《${course.name}》课程资料…")
-        val resources = client.listResources(course)
+        val resources = resourcesOverride ?: client.listResources(course)
         val documentId = courseDocumentId(course)
         val stagingId = "$documentId:sync"
         val pending = ArrayList<ChunkRow>(CHUNK_BATCH_SIZE)
@@ -43,6 +44,8 @@ class KetangpaiResourceSync(
         var pdfPages = 0
         var officeSections = 0
         var failedFiles = 0
+        var skippedRestrictedFiles = 0
+        var reusedCachedFiles = 0
 
         fun flush() {
             if (pending.isEmpty()) return
@@ -99,32 +102,59 @@ class KetangpaiResourceSync(
                         if (resource.sourceTitle.isNotBlank() && resource.sourceTitle != resource.name) appendLine("来源：${resource.sourceTitle}")
                         if (resource.contentType.isNotBlank()) appendLine("内容类型：${resource.contentType}")
                         if (resource.size.isNotBlank()) appendLine("大小：${resource.size}")
-                        if (resource.url.isNotBlank()) appendLine("资源地址：${resource.url}")
+                        if (!resource.downloadAllowed) appendLine("正文同步：平台明确禁止下载，已跳过")
+                        if (resource.downloadAllowed && resource.url.isNotBlank()) appendLine("资源地址：${resource.url}")
                     },
                 )
 
+                if (!resource.downloadAllowed) {
+                    skippedRestrictedFiles++
+                    return@forEachIndexed
+                }
                 if (resource.url.isBlank()) return@forEachIndexed
                 val ext = resource.extension
                 if (ext !in INDEXABLE_EXTENSIONS) return@forEachIndexed
-                val temp = File(appContext.cacheDir, "ketangpai-sync/${safeName(resource.id)}.${ext.ifBlank { "bin" }}")
-                temp.parentFile?.mkdirs()
-                temp.delete()
-                if (!client.downloadResource(resource, temp, MAX_FILE_BYTES)) {
-                    failedFiles++
-                    return@forEachIndexed
+
+                val cached = cacheFile(course, resource, ext)
+                val meta = File(cached.parentFile, cached.name + ".meta")
+                val fingerprint = resourceFingerprint(resource)
+                val cacheValid = cached.isFile && cached.length() > 0L && runCatching {
+                    meta.isFile && meta.readText(Charsets.UTF_8).trim() == fingerprint
+                }.getOrDefault(false)
+
+                if (cacheValid) {
+                    reusedCachedFiles++
+                } else {
+                    cached.parentFile?.mkdirs()
+                    val part = File(cached.parentFile, cached.name + ".part")
+                    part.delete()
+                    if (!client.downloadResource(resource, part, MAX_FILE_BYTES)) {
+                        part.delete()
+                        failedFiles++
+                        return@forEachIndexed
+                    }
+                    cached.delete()
+                    if (!part.renameTo(cached)) {
+                        runCatching { part.copyTo(cached, overwrite = true) }
+                        part.delete()
+                    }
+                    if (!cached.isFile || cached.length() <= 0L) {
+                        failedFiles++
+                        return@forEachIndexed
+                    }
+                    runCatching { meta.writeText(fingerprint, Charsets.UTF_8) }
                 }
+
                 try {
                     when (ext) {
-                        "pdf" -> pdfPages += extractPdf(temp, "${resource.name}", ::addChunk)
-                        "docx" -> officeSections += extractDocx(temp, resource.name, ::addChunk)
-                        "pptx" -> officeSections += extractPptx(temp, resource.name, ::addChunk)
-                        "txt", "md" -> addChunk(resource.name, temp.readText(Charsets.UTF_8).take(MAX_TEXT_FILE_CHARS))
-                        "html", "htm" -> addChunk(resource.name, Jsoup.parse(temp.readText(Charsets.UTF_8).take(MAX_TEXT_FILE_CHARS)).text())
+                        "pdf" -> pdfPages += extractPdf(cached, resource.name, ::addChunk)
+                        "docx" -> officeSections += extractDocx(cached, resource.name, ::addChunk)
+                        "pptx" -> officeSections += extractPptx(cached, resource.name, ::addChunk)
+                        "txt", "md" -> addChunk(resource.name, cached.readText(Charsets.UTF_8).take(MAX_TEXT_FILE_CHARS))
+                        "html", "htm" -> addChunk(resource.name, Jsoup.parse(cached.readText(Charsets.UTF_8).take(MAX_TEXT_FILE_CHARS)).text())
                     }
                 } catch (_: Throwable) {
                     failedFiles++
-                } finally {
-                    temp.delete()
                 }
             }
             flush()
@@ -165,6 +195,8 @@ class KetangpaiResourceSync(
                 extractedPdfPages = pdfPages,
                 importedOfficeSections = officeSections,
                 failedFiles = failedFiles,
+                skippedRestrictedFiles = skippedRestrictedFiles,
+                reusedCachedFiles = reusedCachedFiles,
             )
         } finally {
             pending.clear()
@@ -204,13 +236,24 @@ class KetangpaiResourceSync(
         return imported.sections.size
     }
 
-    private fun courseDocumentId(course: KetangpaiCourse): String {
-        val hex = MessageDigest.getInstance("SHA-256").digest(course.id.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-        return "ktp-" + hex.take(28)
+    private fun cacheFile(course: KetangpaiCourse, resource: KetangpaiResource, ext: String): File {
+        val courseKey = sha256(course.id).take(16)
+        val resourceKey = sha256(resource.id.ifBlank { resource.name + "|" + resource.sourceTitle }).take(24)
+        return File(appContext.cacheDir, "ketangpai-sync-cache/$courseKey/$resourceKey.$ext")
     }
 
-    private fun safeName(raw: String): String = raw.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
+    private fun resourceFingerprint(resource: KetangpaiResource): String {
+        val stableUrl = resource.url.substringBefore('?').substringBefore('#')
+        return sha256(
+            listOf(resource.id, resource.name, resource.size, resource.contentType, resource.sourceTitle, stableUrl)
+                .joinToString("\u001f"),
+        )
+    }
+
+    private fun courseDocumentId(course: KetangpaiCourse): String = "ktp-" + sha256(course.id).take(28)
+
+    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
 
     companion object {
         private const val CHUNK_BATCH_SIZE = 24
