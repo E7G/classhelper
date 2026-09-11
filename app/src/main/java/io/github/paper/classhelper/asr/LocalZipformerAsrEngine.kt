@@ -30,8 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class LocalZipformerAsrEngine(
     private val models: AsrModelManager,
-    private val hotwordsProvider: () -> String = { "" },
     private val spoolDirectory: File? = null,
+    private val hotwordsProvider: () -> String = { "" },
 ) : StreamingAsrEngine {
     data class Health(
         val running: Boolean,
@@ -144,12 +144,13 @@ class LocalZipformerAsrEngine(
                 val config = OnlineRecognizerConfig(
                     featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80, dither = 0.0f),
                     modelConfig = modelConfig,
+                    // Keep the recognition semantics at the proven v1.9.x profile. This redesign
+                    // intentionally changes transport/scheduling only, so quality regressions can be
+                    // attributed and tested without confounding endpoint changes.
                     endpointConfig = EndpointConfig(
-                        rule1 = EndpointRule(false, 2.4f, 0.0f),
-                        rule2 = EndpointRule(true, 0.95f, 0.0f),
-                        // Do not force-reset a fluent lecturer every 18 seconds. A longer ceiling
-                        // preserves context and avoids cutting the stream in the middle of a phrase.
-                        rule3 = EndpointRule(false, 0.0f, 60.0f),
+                        rule1 = EndpointRule(false, 2.0f, 0.0f),
+                        rule2 = EndpointRule(true, 0.75f, 0.0f),
+                        rule3 = EndpointRule(false, 0.0f, 18.0f),
                     ),
                     enableEndpoint = true,
                     decodingMethod = if (hotwords.isBlank()) "greedy_search" else "modified_beam_search",
@@ -197,7 +198,7 @@ class LocalZipformerAsrEngine(
                 spoolFailure = runCatching { appendSpillLocked(chunk, evenBytes) }.exceptionOrNull()
                 if (spoolFailure != null) {
                     // Storage failure is exceptional. Preserve old lossless behavior as a fallback:
-                    // wait for memory space rather than silently dropping a classroom sentence.
+                    // wait for existing spill/memory to drain rather than silently dropping speech.
                     while (
                         running.get() &&
                         (spillAccess != null || pcmRing.size - pcmSize < evenBytes)
