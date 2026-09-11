@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master, feat/ketangpai-resource-browser ]
+    branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
 
