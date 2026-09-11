@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 217
-        versionName = "1.12.2-ketangpai-browser"
+        versionCode = 218
+        versionName = "1.12.3-ketangpai-ui"
         vectorDrawables.useSupportLibrary = true
     }
 
