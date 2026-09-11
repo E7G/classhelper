@@ -32,4 +32,5 @@ data class KetangpaiSyncResult(
     val importedOfficeSections: Int,
     val failedFiles: Int,
     val skippedRestrictedFiles: Int = 0,
+    val reusedCachedFiles: Int = 0,
 )
