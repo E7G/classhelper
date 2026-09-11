@@ -1,9 +1,9 @@
-- 继续保留 1.12.0 的 ASR 重构：AudioRecord 不等待 Zipformer，30 秒内存 FIFO + 异常积压磁盘 PCM 缓存，普通 240 ms、追赶 480 ms，不主动清空尚未识别的课堂音频。
-- 新增课堂派课程资源同步入口：设置 → 课堂派课程资源。
-- 支持课堂派账号/密码直接登录；密码与 API Token 使用现有 AndroidKeyStore + AES-GCM SecretStore 加密保存，Token 失效时可使用已保存凭据自动重新登录。
-- 课程列表优先使用 FutureV2/CourseMeans/getCourseList，并兼容 semesterCourseList；界面只显示课程名称，不显示内部课程 ID。
-- 同步时读取 CourseTemplate 导航并扫描 getCourseContent / CoursewareApi 资料来源，跨来源按资源地址去重。
-- 不使用 canDownload/allowDownload 一类字段做客户端前置拦截：只要当前账号登录态下官方资源接口实际返回可访问地址，就允许读取；服务器真实返回 401/403/失败时按失败处理。
-- PDF 使用低内存 PDFBox 临时文件模式提取正文；DOCX/PPTX 复用现有轻量 OOXML 文本提取器；TXT/Markdown/HTML 也会进入本地知识库。其他格式保留资料名称、来源和资源地址作为检索元数据。
-- 课堂派同步结果保存为独立 ketangpai 知识文档，不改变 PDF-first 架构；课堂问答检索优先级保持“当前 PDF → 当前绑定课堂派课程 → 学习通/其他资料”。
-- 课堂派功能只做课程资料读取/同步，不做签到、刷课、提交作业或修改课程数据。
+- 保留 1.12.x 的无损课堂 ASR 链路与 PDF-first 工作流；课堂派资料作为辅助知识源，不改变当前 PDF 的最高检索优先级。
+- 课堂派课程资源同步继续支持账号/密码登录、加密保存密码与 API Token、Token 失效后自动恢复登录，以及课程选择和知识库绑定。
+- 新增“浏览这门课的全部资料”：整门课的课件、附件和资料平铺展示；PDF 可直接用 ClassHelper 阅读器预览，其他可访问文件下载后交给系统应用打开。
+- 同步增加资源指纹缓存；未变化的 PDF、DOCX、PPTX、TXT、Markdown、HTML 会复用本地缓存，减少重复下载，同时重新生成课程检索索引。
+- 主动识别 canDownload、allowDownload、downloadable、isDownload 等下载权限字段；当接口明确标记为禁止下载时，不保留下载直链、不请求文件正文，只保留资料名称、来源、类型等元数据。
+- 同步结果会显示复用缓存数量、权限限制数量和正文提取失败数量，便于判断同步状态。
+- 课堂派资料预览使用 App 私有目录和 FileProvider，不申请额外存储权限；中文及其他 Unicode 资料文件名可以正常保留。
+- GitHub Actions 增加 Pull Request 校验：PR 会运行源码校验、单元测试、lint 和 debug APK 编译；正式 Release 仍只在 main 分支发布。
+- 课堂派功能仍只做课程资料读取、预览和同步，不签到、不刷课、不提交作业、不修改课程数据。
