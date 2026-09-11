@@ -264,7 +264,7 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
         insetBottom = 0
     }
 
-    private fun safeName(raw: String): String = raw.replace(Regex("[^A-Za-z0-9._()\\-\\u4e00-\\u9fff ]"), "_").take(120)
+    private fun safeName(raw: String): String = raw.replace(Regex("[^\\p{L}\\p{N}._() -]"), "_").take(120)
 
     private fun extensionSuffix(resource: KetangpaiResource): String = resource.extension.takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty()
 
