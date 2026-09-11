@@ -31,6 +31,9 @@
             android:name=".ui.ChaoxingWebActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.KetangpaiActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.LibraryActivity"
             android:exported="false" />
         <activity

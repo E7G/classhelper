@@ -1,10 +1,9 @@
-- 重新设计课堂语音识别的数据链路，优先保证连续采集和不漏课堂音频；保持 PDF-first、学习通资料预览和问题停顿门不变。
-- AudioRecord 采集线程不再等待 Zipformer 解码器：PCM 先进入约 30 秒固定内存 FIFO，识别严重落后时自动按原始顺序溢写到 App 私有 PCM 缓存文件，避免解码积压反向卡死麦克风读取。
-- 16 kHz 单声道 PCM16 仅约 32 KB/s；磁盘溢写只在异常积压时启用，追赶完成立即关闭并删除临时 PCM 文件，启动时也会清理异常退出遗留的旧缓存。
-- 撤销 60/120/240 ms 高频自适应喂流，恢复经过 1.9.x 验证的 240 ms Zipformer 主批次；积压超过约 1.5 秒时自动使用 480 ms 追赶批次，减少 JNI/解码调度开销而不跳过样本。
-- 已从 FIFO 取出的当前解码批次在 native accept/decode 成功前会保留；若 sherpa-onnx 临时抛错，不再静默丢掉刚取出的那段 PCM。
-- 识别语义参数刻意恢复/保持 1.9.x 高质量基线：endpoint 2.0 / 0.75 / 18 秒、4-path modified beam、课程/PDF 上下文热词；本版只重做音频运输和解码调度，便于直接验证漏音改善。
-- 保留高优先级 Zipformer 解码线程，以及 ASR 回调与数据库、问题/LLM、自动笔记、PDF 匹配的异步隔离。
-- 解码积压时状态会显示已缓存音频时长；如果进入磁盘无损缓冲，会同时显示磁盘缓存时长，便于区分“模型慢”与“麦克风没录到”。
-- 保留 AudioRecord 自动恢复；ASR watchdog 仍不会在课堂中途 stop/recreate Zipformer，避免主动清空尚未识别的音频。
-- 保留学习通课程资料平铺预览、账号密码加密保存、低内存 PDF/OCR，以及问题/答案不发送额外系统通知。
+- 继续保留 1.12.0 的 ASR 重构：AudioRecord 不等待 Zipformer，30 秒内存 FIFO + 异常积压磁盘 PCM 缓存，普通 240 ms、追赶 480 ms，不主动清空尚未识别的课堂音频。
+- 新增课堂派课程资源同步入口：设置 → 课堂派课程资源。
+- 支持课堂派账号/密码直接登录；密码与 API Token 使用现有 AndroidKeyStore + AES-GCM SecretStore 加密保存，Token 失效时可使用已保存凭据自动重新登录。
+- 课程列表优先使用 FutureV2/CourseMeans/getCourseList，并兼容 semesterCourseList；界面只显示课程名称，不显示内部课程 ID。
+- 同步时读取 CourseTemplate 导航并扫描 getCourseContent / CoursewareApi 资料来源，跨来源按资源地址去重。
+- 不使用 canDownload/allowDownload 一类字段做客户端前置拦截：只要当前账号登录态下官方资源接口实际返回可访问地址，就允许读取；服务器真实返回 401/403/失败时按失败处理。
+- PDF 使用低内存 PDFBox 临时文件模式提取正文；DOCX/PPTX 复用现有轻量 OOXML 文本提取器；TXT/Markdown/HTML 也会进入本地知识库。其他格式保留资料名称、来源和资源地址作为检索元数据。
+- 课堂派同步结果保存为独立 ketangpai 知识文档，不改变 PDF-first 架构；课堂问答检索优先级保持“当前 PDF → 当前绑定课堂派课程 → 学习通/其他资料”。
+- 课堂派功能只做课程资料读取/同步，不做签到、刷课、提交作业或修改课程数据。

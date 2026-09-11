@@ -145,6 +145,19 @@ class SettingsActivity : AppCompatActivity() {
                     bottomMargin = dp(4)
                 },
             )
+            val ketangpai = MaterialButton(this).apply {
+                text = "课堂派课程资源"
+                minHeight = dp(50)
+                setOnClickListener { startActivity(Intent(this@SettingsActivity, KetangpaiActivity::class.java)) }
+            }
+            parent.addView(
+                ketangpai,
+                parent.indexOfChild(libraryButton),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)).apply {
+                    topMargin = dp(8)
+                    bottomMargin = dp(4)
+                },
+            )
         }
 
         findViewById<Button>(R.id.saveSettingsButton).setOnClickListener {

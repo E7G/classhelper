@@ -60,6 +60,36 @@ class SettingsStore(context: Context) {
         get() = prefs.getLong("chaoxing_last_sync", 0L)
         set(value) = prefs.edit().putLong("chaoxing_last_sync", value).apply()
 
+    var ketangpaiAccount: String
+        get() = prefs.getString("ketangpai_account", "")!!
+        set(value) = prefs.edit().putString("ketangpai_account", value.trim()).apply()
+
+    /** KETANGPAI password is encrypted with AndroidKeyStore AES-GCM. */
+    var ketangpaiPassword: String
+        get() = secrets.get("ketangpai_password")
+        set(value) = secrets.put("ketangpai_password", value)
+
+    /** KETANGPAI API token is encrypted at rest as well. */
+    var ketangpaiToken: String
+        get() = secrets.get("ketangpai_token")
+        set(value) = secrets.put("ketangpai_token", value.trim())
+
+    var ketangpaiCourseId: String
+        get() = prefs.getString("ketangpai_course_id", "")!!
+        set(value) = prefs.edit().putString("ketangpai_course_id", value).apply()
+
+    var ketangpaiCourseName: String
+        get() = prefs.getString("ketangpai_course_name", "")!!
+        set(value) = prefs.edit().putString("ketangpai_course_name", value).apply()
+
+    var ketangpaiCourseDocumentId: String?
+        get() = prefs.getString("ketangpai_course_document_id", null)
+        set(value) = prefs.edit().putString("ketangpai_course_document_id", value).apply()
+
+    var ketangpaiLastSync: Long
+        get() = prefs.getLong("ketangpai_last_sync", 0L)
+        set(value) = prefs.edit().putLong("ketangpai_last_sync", value).apply()
+
     var autoNotes: Boolean
         get() = prefs.getBoolean("auto_notes", true)
         set(value) = prefs.edit().putBoolean("auto_notes", value).apply()

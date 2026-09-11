@@ -23,16 +23,21 @@ class QuestionPipeline(
         scope.launch {
             val settings = app.graph.settings
             val db = app.graph.db
+            val preferred = if (
+                settings.ketangpaiCourseDocumentId != null &&
+                settings.ketangpaiLastSync >= settings.chaoxingLastSync
+            ) settings.ketangpaiCourseDocumentId else settings.chaoxingCourseDocumentId
             val contextHits = app.graph.knowledge.retrieve(
                 question = question,
                 currentDocumentId = settings.currentDocumentId,
                 currentPage = settings.currentPage,
-                preferredDocumentId = settings.chaoxingCourseDocumentId,
+                preferredDocumentId = preferred,
             )
             val recentLecture = db.recentTranscripts(16, sessionId).joinToString("\n") { it.text }.takeLast(6_000)
             val evidence = contextHits.joinToString("\n\n") { "[${it.label}]\n${it.text}" }
             val prompt = buildString {
                 appendLine("老师刚刚提出的问题：$question")
+                if (settings.ketangpaiCourseName.isNotBlank()) appendLine("当前绑定课堂派课程：${settings.ketangpaiCourseName}")
                 if (settings.chaoxingCourseName.isNotBlank()) appendLine("当前绑定学习通课程：${settings.chaoxingCourseName}")
                 if (recentLecture.isNotBlank()) {
                     appendLine("\n最近课堂上下文：")
@@ -43,7 +48,7 @@ class QuestionPipeline(
                     appendLine(evidence)
                 }
                 appendLine("\n请给学生一个课堂快速参考答案。第一行先直接回答，随后最多用3个短要点解释。")
-                appendLine("课程资料足以支撑时优先依据当前学习通课程/PDF；资料不足时明确写‘根据一般知识补充’。不要编造页码或资料出处。")
+                appendLine("资料足以支撑时优先依据当前 PDF 与最近同步绑定的课堂派/学习通课程资料；资料不足时明确写‘根据一般知识补充’。不要编造页码或资料出处。")
             }
             if (seq == sequence.get()) {
                 ClassroomBus.update { it.copy(lastQuestion = question, answer = "", answerStreaming = true) }
