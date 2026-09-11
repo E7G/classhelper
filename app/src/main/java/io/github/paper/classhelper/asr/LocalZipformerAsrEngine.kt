@@ -1,5 +1,6 @@
 package io.github.paper.classhelper.asr
 
+import android.os.Process
 import android.os.SystemClock
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
@@ -10,60 +11,83 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * True streaming Chinese ASR based on sherpa-onnx Zipformer Transducer INT8.
+ * Loss-resistant streaming Chinese ASR based on sherpa-onnx Zipformer Transducer INT8.
  *
- * The native decoder stays isolated from app work, but recognition quality follows the proven
- * v1.9 profile: contextual hotwords use modified-beam with four active paths. Audio is fed with an
- * adaptive 60/120/240 ms batch: low backlog favors latency; larger backlog automatically batches
- * more audio for throughput. The fixed PCM ring never intentionally discards classroom audio.
+ * Design goals:
+ * 1. The AudioRecord thread never waits for neural decoding. PCM first enters a fixed memory FIFO;
+ *    if decoding ever falls far behind, overflow is appended in-order to a tiny raw-PCM spool file.
+ * 2. Zipformer is fed in 240 ms batches (480 ms only while catching up). This restores the proven
+ *    v1.9 throughput profile and avoids the 4x JNI/decode scheduling overhead of 60 ms feeding.
+ * 3. Native decoding and app callbacks use separate executors, so database/LLM/PDF work cannot
+ *    block the recognizer.
+ * 4. A batch removed from the FIFO is kept as a pending batch until native processing succeeds;
+ *    transient recognizer failures therefore do not silently discard the just-dequeued PCM.
  */
 class LocalZipformerAsrEngine(
     private val models: AsrModelManager,
     private val hotwordsProvider: () -> String = { "" },
+    private val spoolDirectory: File? = null,
 ) : StreamingAsrEngine {
     data class Health(
         val running: Boolean,
         val bufferedAudioMs: Int,
+        val spilledAudioMs: Int,
         val lastPcmAgeMs: Long,
         val lastDecodeAgeMs: Long,
         val decoderBusy: Boolean,
     )
 
-    private val worker = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "ClassHelper-Zipformer-Streaming").apply {
+    private val worker = Executors.newSingleThreadExecutor { task ->
+        Thread({
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE) }
+            task.run()
+        }, "ClassHelper-Zipformer-Streaming").apply {
             priority = (Thread.NORM_PRIORITY + 2).coerceAtMost(Thread.MAX_PRIORITY)
         }
     }
-    // Callbacks now only enqueue lightweight service work, so keep this at normal priority to avoid
-    // stale partial subtitles piling up behind CPU-heavy classroom tasks.
-    private val callbacks = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "ClassHelper-ASR-Callbacks").apply { priority = Thread.NORM_PRIORITY }
+    private val callbacks = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "ClassHelper-ASR-Callbacks").apply { priority = Thread.NORM_PRIORITY }
     }
     private val running = AtomicBoolean(false)
 
     private val audioLock = Object()
     private val pcmRing = ByteArray(PCM_RING_CAPACITY_BYTES)
-    private val decodePcm = ByteArray(MAX_DECODE_BATCH_BYTES)
-    private val decodeSamples60 = FloatArray(CAPTURE_FRAME_BYTES / BYTES_PER_SAMPLE)
-    private val decodeSamples120 = FloatArray(MEDIUM_DECODE_BATCH_BYTES / BYTES_PER_SAMPLE)
-    private val decodeSamples240 = FloatArray(MAX_DECODE_BATCH_BYTES / BYTES_PER_SAMPLE)
+    private val decodePcm = ByteArray(CATCHUP_DECODE_BATCH_BYTES)
+    private val decodeSamples240 = FloatArray(NORMAL_DECODE_BATCH_BYTES / BYTES_PER_SAMPLE)
+    private val decodeSamples480 = FloatArray(CATCHUP_DECODE_BATCH_BYTES / BYTES_PER_SAMPLE)
     private var pcmRead = 0
     private var pcmWrite = 0
     private var pcmSize = 0
     private var drainScheduled = false
+
+    // Once spill mode starts, all newly captured PCM is appended to this file until it is fully
+    // drained. That preserves strict FIFO order between the in-memory prefix and the disk suffix.
+    private var spillFile: File? = null
+    private var spillAccess: RandomAccessFile? = null
+    private var spillReadOffset = 0L
+    private var spillWriteOffset = 0L
+
+    // The current batch has already been removed from the FIFO, but we keep it intact until native
+    // accept/decode succeeds. On a transient exception the next drain retries the same PCM first.
+    private var pendingDecodeBytes = 0
 
     @Volatile private var listener: StreamingAsrEngine.Listener? = null
     @Volatile private var lastBacklogNoticeMs = 0L
     @Volatile private var lastPcmReceivedMs = 0L
     @Volatile private var lastDecodeActivityMs = 0L
     @Volatile private var backlogMsSnapshot = 0
+    @Volatile private var spillMsSnapshot = 0
     @Volatile private var decoderBusy = false
+    @Volatile private var spoolFailureReported = false
+
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
+    private var activeModelDir: File? = null
     private var lastPartial = ""
     private var speechStatusShown = false
 
@@ -74,6 +98,7 @@ class LocalZipformerAsrEngine(
         return Health(
             running = running.get(),
             bufferedAudioMs = backlogMsSnapshot,
+            spilledAudioMs = spillMsSnapshot,
             lastPcmAgeMs = if (pcmAt <= 0L) Long.MAX_VALUE else (now - pcmAt).coerceAtLeast(0L),
             lastDecodeAgeMs = if (decodeAt <= 0L) Long.MAX_VALUE else (now - decodeAt).coerceAtLeast(0L),
             decoderBusy = decoderBusy,
@@ -83,11 +108,12 @@ class LocalZipformerAsrEngine(
     override fun start(listener: StreamingAsrEngine.Listener) {
         if (!running.compareAndSet(false, true)) return
         this.listener = listener
-        clearPcmRing()
+        clearAudioBuffer()
         val now = SystemClock.elapsedRealtime()
         lastPcmReceivedMs = 0L
         lastDecodeActivityMs = now
         decoderBusy = false
+        spoolFailureReported = false
         dispatchState("正在加载 Zipformer 流式中文模型…")
 
         val dir = models.modelDirectory()
@@ -96,6 +122,8 @@ class LocalZipformerAsrEngine(
             dispatchError("Zipformer 流式模型尚未下载")
             return
         }
+        activeModelDir = dir
+        cleanupStaleSpoolFiles()
 
         worker.execute {
             try {
@@ -117,9 +145,11 @@ class LocalZipformerAsrEngine(
                     featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80, dither = 0.0f),
                     modelConfig = modelConfig,
                     endpointConfig = EndpointConfig(
-                        rule1 = EndpointRule(false, 2.0f, 0.0f),
-                        rule2 = EndpointRule(true, 0.75f, 0.0f),
-                        rule3 = EndpointRule(false, 0.0f, 18.0f),
+                        rule1 = EndpointRule(false, 2.4f, 0.0f),
+                        rule2 = EndpointRule(true, 0.95f, 0.0f),
+                        // Do not force-reset a fluent lecturer every 18 seconds. A longer ceiling
+                        // preserves context and avoids cutting the stream in the middle of a phrase.
+                        rule3 = EndpointRule(false, 0.0f, 60.0f),
                     ),
                     enableEndpoint = true,
                     decodingMethod = if (hotwords.isBlank()) "greedy_search" else "modified_beam_search",
@@ -136,125 +166,162 @@ class LocalZipformerAsrEngine(
                 lastDecodeActivityMs = SystemClock.elapsedRealtime()
                 if (running.get()) {
                     dispatchState(
-                        if (hotwords.isBlank()) "Zipformer 已就绪 · 实时中文识别"
-                        else "Zipformer 已就绪 · 实时中文识别 · 课程上下文热词已启用",
+                        if (hotwords.isBlank()) "Zipformer 已就绪 · 连续中文识别"
+                        else "Zipformer 已就绪 · 连续中文识别 · 课程热词已启用",
                     )
                     scheduleDrainIfNeeded()
                 }
             } catch (t: Throwable) {
                 running.set(false)
-                clearPcmRing()
+                clearAudioBuffer()
                 dispatchError("Zipformer 初始化失败：${t.message ?: t.javaClass.simpleName}", t)
                 releaseNative()
             }
         }
     }
 
+    /**
+     * Capture ingress must return quickly. It never waits for decoder space. When the 30-second
+     * memory FIFO fills, newer PCM is appended to a raw spool file at ~32 KB/s.
+     */
     override fun sendPcm16(chunk: ByteArray) {
         if (!running.get() || chunk.size < 2) return
+        val evenBytes = chunk.size and -2
+        if (evenBytes <= 0) return
         lastPcmReceivedMs = SystemClock.elapsedRealtime()
 
         var shouldSchedule = false
+        var spoolFailure: Throwable? = null
         synchronized(audioLock) {
-            while (running.get() && pcmRing.size - pcmSize < chunk.size) {
-                try {
-                    audioLock.wait(RING_FULL_WAIT_MS)
-                } catch (_: InterruptedException) {
-                    if (!running.get()) return
+            if (spillAccess != null || pcmRing.size - pcmSize < evenBytes) {
+                spoolFailure = runCatching { appendSpillLocked(chunk, evenBytes) }.exceptionOrNull()
+                if (spoolFailure != null) {
+                    // Storage failure is exceptional. Preserve old lossless behavior as a fallback:
+                    // wait for memory space rather than silently dropping a classroom sentence.
+                    while (
+                        running.get() &&
+                        (spillAccess != null || pcmRing.size - pcmSize < evenBytes)
+                    ) {
+                        try {
+                            audioLock.wait(RING_FULL_FALLBACK_WAIT_MS)
+                        } catch (_: InterruptedException) {
+                            if (!running.get()) return
+                        }
+                    }
+                    if (running.get()) writeMemoryLocked(chunk, evenBytes)
                 }
+            } else {
+                writeMemoryLocked(chunk, evenBytes)
             }
-            if (!running.get()) return
-
-            var src = 0
-            var remaining = chunk.size
-            while (remaining > 0) {
-                val count = minOf(remaining, pcmRing.size - pcmWrite)
-                System.arraycopy(chunk, src, pcmRing, pcmWrite, count)
-                pcmWrite = (pcmWrite + count) % pcmRing.size
-                pcmSize += count
-                src += count
-                remaining -= count
-            }
-            updateBacklogSnapshotLocked()
-            if (!drainScheduled && pcmSize >= CAPTURE_FRAME_BYTES) {
+            updateBufferSnapshotsLocked()
+            if (
+                !drainScheduled &&
+                (pendingDecodeBytes > 0 || availableDecodeBytesLocked() >= NORMAL_DECODE_BATCH_BYTES)
+            ) {
                 drainScheduled = true
                 shouldSchedule = true
             }
         }
 
-        if (shouldSchedule) {
-            runCatching { worker.execute { drainPcmBatches() } }
-                .onFailure {
-                    synchronized(audioLock) {
-                        drainScheduled = false
-                        audioLock.notifyAll()
-                    }
-                }
+        if (spoolFailure != null && !spoolFailureReported) {
+            spoolFailureReported = true
+            dispatchError(
+                "无损音频缓存写盘失败，已退回内存等待模式：${spoolFailure?.message ?: spoolFailure?.javaClass?.simpleName}",
+                spoolFailure,
+            )
         }
+        if (shouldSchedule) submitDrain()
+    }
+
+    private fun submitDrain() {
+        runCatching { worker.execute { drainPcmBatches() } }
+            .onFailure {
+                synchronized(audioLock) {
+                    drainScheduled = false
+                    audioLock.notifyAll()
+                }
+            }
     }
 
     private fun scheduleDrainIfNeeded() {
         var shouldSchedule = false
         synchronized(audioLock) {
-            if (running.get() && !drainScheduled && pcmSize >= CAPTURE_FRAME_BYTES) {
+            if (
+                running.get() &&
+                !drainScheduled &&
+                (pendingDecodeBytes > 0 || availableDecodeBytesLocked() >= NORMAL_DECODE_BATCH_BYTES)
+            ) {
                 drainScheduled = true
                 shouldSchedule = true
             }
         }
-        if (shouldSchedule) {
-            runCatching { worker.execute { drainPcmBatches() } }
-                .onFailure {
-                    synchronized(audioLock) {
-                        drainScheduled = false
-                        audioLock.notifyAll()
-                    }
-                }
-        }
+        if (shouldSchedule) submitDrain()
     }
 
     /**
-     * Feed 60 ms while caught up for low subtitle latency, 120 ms under moderate backlog, and
-     * 240 ms only when the decoder needs throughput. No audio is skipped between batch sizes.
+     * Normal recognition uses the proven 240 ms batch. If backlog exceeds 1.5 seconds, 480 ms
+     * feeding reduces Java/JNI scheduling overhead while preserving every sample in order.
      */
     private fun drainPcmBatches() {
         while (running.get()) {
-            var byteCount = 0
-            val backlogMs = synchronized(audioLock) {
-                if (pcmSize < CAPTURE_FRAME_BYTES) {
-                    drainScheduled = false
-                    updateBacklogSnapshotLocked()
-                    -1
+            val batch = synchronized(audioLock) {
+                if (pendingDecodeBytes > 0) {
+                    pendingDecodeBytes to backlogMsSnapshot
                 } else {
-                    byteCount = chooseDecodeBytesLocked()
-                    readPcmLocked(decodePcm, byteCount)
+                    val available = availableDecodeBytesLocked()
+                    if (available < NORMAL_DECODE_BATCH_BYTES) {
+                        drainScheduled = false
+                        updateBufferSnapshotsLocked()
+                        return
+                    }
+                    val requested = if (available >= CATCHUP_TRIGGER_BYTES) {
+                        minOf(CATCHUP_DECODE_BATCH_BYTES.toLong(), available).toInt() and -2
+                    } else {
+                        NORMAL_DECODE_BATCH_BYTES
+                    }
+                    val read = readBufferedLocked(decodePcm, requested)
+                    if (read != requested) {
+                        drainScheduled = false
+                        updateBufferSnapshotsLocked()
+                        dispatchError("音频缓冲读取异常：期望 $requested 字节，实际 $read 字节")
+                        return
+                    }
+                    pendingDecodeBytes = requested
+                    updateBufferSnapshotsLocked()
                     audioLock.notifyAll()
-                    updateBacklogSnapshotLocked()
-                    backlogMsSnapshot
+                    requested to backlogMsSnapshot
                 }
             }
-            if (byteCount <= 0 || backlogMs < 0) return
+
+            val byteCount = batch.first
+            val backlogMs = batch.second
             maybeReportBacklog(backlogMs)
             val samples = reusableSamples(byteCount)
             convertPcm16ToFloat(decodePcm, samples, byteCount)
-            acceptSamples(samples)
+            if (!acceptSamples(samples)) {
+                // Keep pendingDecodeBytes and the unchanged decodePcm so this exact batch can be
+                // retried later. Do not dequeue newer audio past a failed native batch.
+                synchronized(audioLock) {
+                    drainScheduled = false
+                    updateBufferSnapshotsLocked()
+                }
+                return
+            }
+            synchronized(audioLock) {
+                pendingDecodeBytes = 0
+                updateBufferSnapshotsLocked()
+            }
         }
         synchronized(audioLock) {
             drainScheduled = false
-            updateBacklogSnapshotLocked()
+            updateBufferSnapshotsLocked()
             audioLock.notifyAll()
         }
     }
 
-    private fun chooseDecodeBytesLocked(): Int = when {
-        pcmSize >= LARGE_BACKLOG_BYTES -> MAX_DECODE_BATCH_BYTES
-        pcmSize >= MEDIUM_BACKLOG_BYTES -> MEDIUM_DECODE_BATCH_BYTES
-        else -> CAPTURE_FRAME_BYTES
-    }
-
     private fun reusableSamples(byteCount: Int): FloatArray = when (byteCount) {
-        CAPTURE_FRAME_BYTES -> decodeSamples60
-        MEDIUM_DECODE_BATCH_BYTES -> decodeSamples120
-        MAX_DECODE_BATCH_BYTES -> decodeSamples240
+        NORMAL_DECODE_BATCH_BYTES -> decodeSamples240
+        CATCHUP_DECODE_BATCH_BYTES -> decodeSamples480
         else -> FloatArray(byteCount / BYTES_PER_SAMPLE)
     }
 
@@ -263,21 +330,91 @@ class LocalZipformerAsrEngine(
         val now = SystemClock.elapsedRealtime()
         if (now - lastBacklogNoticeMs < BACKLOG_NOTICE_INTERVAL_MS) return
         lastBacklogNoticeMs = now
+        val spillMs = spillMsSnapshot
         dispatchState(
-            String.format(
-                java.util.Locale.getDefault(),
-                "识别负载较高 · 正在追赶约 %.1f 秒音频",
-                backlogMs / 1000.0,
-            ),
+            if (spillMs > 0) {
+                String.format(
+                    java.util.Locale.getDefault(),
+                    "识别正在追赶 · 已无损缓存 %.1f 秒（磁盘 %.1f 秒）",
+                    backlogMs / 1000.0,
+                    spillMs / 1000.0,
+                )
+            } else {
+                String.format(
+                    java.util.Locale.getDefault(),
+                    "识别正在追赶 · 已缓存 %.1f 秒音频",
+                    backlogMs / 1000.0,
+                )
+            },
         )
     }
 
-    private fun updateBacklogSnapshotLocked() {
-        backlogMsSnapshot = ((pcmSize.toLong() * 1000L) / (SAMPLE_RATE * BYTES_PER_SAMPLE)).toInt()
+    private fun writeMemoryLocked(source: ByteArray, byteCount: Int) {
+        var src = 0
+        var remaining = byteCount
+        while (remaining > 0) {
+            val count = minOf(remaining, pcmRing.size - pcmWrite)
+            System.arraycopy(source, src, pcmRing, pcmWrite, count)
+            pcmWrite = (pcmWrite + count) % pcmRing.size
+            pcmSize += count
+            src += count
+            remaining -= count
+        }
     }
 
-    private fun readPcmLocked(target: ByteArray, count: Int) {
+    private fun appendSpillLocked(source: ByteArray, byteCount: Int) {
+        val raf = spillAccess ?: createSpillLocked()
+        raf.seek(spillWriteOffset)
+        raf.write(source, 0, byteCount)
+        spillWriteOffset += byteCount
+    }
+
+    private fun createSpillLocked(): RandomAccessFile {
+        val dir = resolvedSpoolDirectory() ?: error("ASR spool directory is unavailable")
+        check(dir.exists() || dir.mkdirs()) { "无法创建 ASR 音频缓存目录" }
+        val file = File(dir, "asr-${System.currentTimeMillis()}-${System.nanoTime()}.pcm")
+        val raf = RandomAccessFile(file, "rw")
+        spillFile = file
+        spillAccess = raf
+        spillReadOffset = 0L
+        spillWriteOffset = 0L
+        return raf
+    }
+
+    private fun availableDecodeBytesLocked(): Long =
+        pcmSize.toLong() + (spillWriteOffset - spillReadOffset).coerceAtLeast(0L)
+
+    private fun readBufferedLocked(target: ByteArray, count: Int): Int {
         var dst = 0
+        var remaining = count
+
+        if (remaining > 0 && pcmSize > 0) {
+            val fromMemory = minOf(remaining, pcmSize)
+            readMemoryLocked(target, dst, fromMemory)
+            dst += fromMemory
+            remaining -= fromMemory
+        }
+
+        if (remaining > 0) {
+            val raf = spillAccess ?: return dst
+            val availableSpill = (spillWriteOffset - spillReadOffset).coerceAtLeast(0L)
+            var need = minOf(remaining.toLong(), availableSpill).toInt()
+            raf.seek(spillReadOffset)
+            while (need > 0) {
+                val n = raf.read(target, dst, need)
+                if (n <= 0) break
+                spillReadOffset += n
+                dst += n
+                remaining -= n
+                need -= n
+            }
+            if (spillReadOffset >= spillWriteOffset) closeSpillLocked(delete = true)
+        }
+        return dst
+    }
+
+    private fun readMemoryLocked(target: ByteArray, offset: Int, count: Int) {
+        var dst = offset
         var remaining = count
         while (remaining > 0) {
             val copy = minOf(remaining, pcmRing.size - pcmRead)
@@ -289,6 +426,16 @@ class LocalZipformerAsrEngine(
         }
     }
 
+    private fun updateBufferSnapshotsLocked() {
+        val queued = availableDecodeBytesLocked() + pendingDecodeBytes
+        val spilled = (spillWriteOffset - spillReadOffset).coerceAtLeast(0L)
+        backlogMsSnapshot = bytesToMs(queued)
+        spillMsSnapshot = bytesToMs(spilled)
+    }
+
+    private fun bytesToMs(bytes: Long): Int =
+        ((bytes * 1000L) / (SAMPLE_RATE * BYTES_PER_SAMPLE)).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
     private fun convertPcm16ToFloat(source: ByteArray, target: FloatArray, byteCount: Int) {
         var src = 0
         var dst = 0
@@ -299,42 +446,55 @@ class LocalZipformerAsrEngine(
         }
     }
 
-    private fun drainRemainingPcm() {
+    /** Flush the final short batch after AudioCapture has stopped. */
+    private fun drainRemainingPcm(): Boolean {
+        if (pendingDecodeBytes > 0) {
+            val samples = reusableSamples(pendingDecodeBytes)
+            convertPcm16ToFloat(decodePcm, samples, pendingDecodeBytes)
+            if (!acceptSamples(samples)) return false
+            synchronized(audioLock) { pendingDecodeBytes = 0 }
+        }
+
         while (true) {
             val count = synchronized(audioLock) {
-                if (pcmSize <= 0) {
-                    updateBacklogSnapshotLocked()
+                val available = availableDecodeBytesLocked()
+                if (available <= 0L) {
+                    updateBufferSnapshotsLocked()
                     0
                 } else {
-                    val even = minOf(pcmSize, MAX_DECODE_BATCH_BYTES) and -2
-                    if (even > 0) {
-                        readPcmLocked(decodePcm, even)
-                        updateBacklogSnapshotLocked()
-                        audioLock.notifyAll()
-                    }
-                    even
+                    val even = minOf(available, CATCHUP_DECODE_BATCH_BYTES.toLong()).toInt() and -2
+                    val read = if (even > 0) readBufferedLocked(decodePcm, even) else 0
+                    pendingDecodeBytes = read
+                    updateBufferSnapshotsLocked()
+                    audioLock.notifyAll()
+                    read
                 }
             }
-            if (count <= 0) return
+            if (count <= 0) return true
             val samples = reusableSamples(count)
             convertPcm16ToFloat(decodePcm, samples, count)
-            acceptSamples(samples)
+            if (!acceptSamples(samples)) return false
+            synchronized(audioLock) {
+                pendingDecodeBytes = 0
+                updateBufferSnapshotsLocked()
+            }
         }
     }
 
-    private fun acceptSamples(samples: FloatArray) {
-        val rec = recognizer ?: return
-        val current = stream ?: return
+    private fun acceptSamples(samples: FloatArray): Boolean {
+        val rec = recognizer ?: return false
+        val current = stream ?: return false
         decoderBusy = true
-        try {
+        return try {
             current.acceptWaveform(samples, SAMPLE_RATE)
-            lastDecodeActivityMs = SystemClock.elapsedRealtime()
             decodeReady(rec, current)
             publishResult(rec, current)
             if (rec.isEndpoint(current)) finalizeEndpoint(rec, current)
             lastDecodeActivityMs = SystemClock.elapsedRealtime()
+            true
         } catch (t: Throwable) {
-            dispatchError("Zipformer 流式识别失败：${t.message ?: t.javaClass.simpleName}", t)
+            dispatchError("Zipformer 流式识别失败，当前音频批次已保留：${t.message ?: t.javaClass.simpleName}", t)
+            false
         } finally {
             decoderBusy = false
         }
@@ -354,7 +514,7 @@ class LocalZipformerAsrEngine(
         dispatchPartial(text)
         if (!speechStatusShown) {
             speechStatusShown = true
-            dispatchState("正在听课 · 实时识别中")
+            dispatchState("正在听课 · 连续识别中")
         }
     }
 
@@ -375,10 +535,10 @@ class LocalZipformerAsrEngine(
         runCatching {
             worker.execute {
                 try {
-                    drainRemainingPcm()
+                    val drained = drainRemainingPcm()
                     val rec = recognizer
                     val current = stream
-                    if (rec != null && current != null) {
+                    if (drained && rec != null && current != null) {
                         decoderBusy = true
                         current.inputFinished()
                         while (rec.isReady(current)) {
@@ -404,7 +564,7 @@ class LocalZipformerAsrEngine(
 
     override fun stop() {
         if (!running.getAndSet(false)) {
-            clearPcmRing()
+            clearAudioBuffer()
             runCatching { worker.execute { releaseNative() } }
             runCatching { worker.shutdown() }
             runCatching { callbacks.shutdown() }
@@ -416,19 +576,51 @@ class LocalZipformerAsrEngine(
         runCatching { callbacks.shutdown() }
     }
 
-    private fun clearPcmRing() {
+    private fun clearAudioBuffer() {
         synchronized(audioLock) {
             pcmRead = 0
             pcmWrite = 0
             pcmSize = 0
+            pendingDecodeBytes = 0
             drainScheduled = false
+            closeSpillLocked(delete = true)
             backlogMsSnapshot = 0
+            spillMsSnapshot = 0
             audioLock.notifyAll()
         }
     }
 
+    private fun closeSpillLocked(delete: Boolean) {
+        runCatching { spillAccess?.close() }
+        spillAccess = null
+        val file = spillFile
+        spillFile = null
+        spillReadOffset = 0L
+        spillWriteOffset = 0L
+        if (delete && file != null) runCatching { file.delete() }
+    }
+
+    private fun resolvedSpoolDirectory(): File? {
+        spoolDirectory?.let { return it }
+        val modelDir = activeModelDir ?: models.modelDirectory() ?: return null
+        return File(modelDir.parentFile ?: modelDir, "asr-pcm-spool")
+    }
+
+    private fun cleanupStaleSpoolFiles() {
+        val dir = resolvedSpoolDirectory() ?: return
+        runCatching {
+            if (dir.exists()) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isFile && file.name.startsWith("asr-") && file.name.endsWith(".pcm")) {
+                        file.delete()
+                    }
+                }
+            }
+        }
+    }
+
     private fun releaseNative() {
-        clearPcmRing()
+        clearAudioBuffer()
         runCatching { stream?.release() }
         stream = null
         runCatching { recognizer?.release() }
@@ -436,6 +628,7 @@ class LocalZipformerAsrEngine(
         lastPartial = ""
         speechStatusShown = false
         decoderBusy = false
+        activeModelDir = null
     }
 
     private fun dispatchState(state: String) {
@@ -487,17 +680,23 @@ class LocalZipformerAsrEngine(
         private const val SAMPLE_RATE = 16_000
         private const val BYTES_PER_SAMPLE = 2
         private const val MAX_HOTWORDS = 64
-        private const val CAPTURE_FRAME_MS = 60
-        private const val CAPTURE_FRAME_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * CAPTURE_FRAME_MS / 1000
-        private const val MEDIUM_DECODE_BATCH_BYTES = CAPTURE_FRAME_BYTES * 2
-        private const val MAX_DECODE_BATCH_BYTES = CAPTURE_FRAME_BYTES * 4
-        private const val MEDIUM_BACKLOG_MS = 360
-        private const val LARGE_BACKLOG_MS = 1_200
-        private const val MEDIUM_BACKLOG_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * MEDIUM_BACKLOG_MS / 1000
-        private const val LARGE_BACKLOG_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * LARGE_BACKLOG_MS / 1000
-        private const val PCM_RING_SECONDS = 180
+
+        private const val NORMAL_DECODE_BATCH_MS = 240
+        private const val CATCHUP_DECODE_BATCH_MS = 480
+        private const val NORMAL_DECODE_BATCH_BYTES =
+            SAMPLE_RATE * BYTES_PER_SAMPLE * NORMAL_DECODE_BATCH_MS / 1000
+        private const val CATCHUP_DECODE_BATCH_BYTES =
+            SAMPLE_RATE * BYTES_PER_SAMPLE * CATCHUP_DECODE_BATCH_MS / 1000
+
+        private const val CATCHUP_TRIGGER_MS = 1_500
+        private const val CATCHUP_TRIGGER_BYTES =
+            SAMPLE_RATE.toLong() * BYTES_PER_SAMPLE * CATCHUP_TRIGGER_MS / 1000L
+
+        // Thirty seconds stays in RAM (~0.92 MiB). Only unusually large decoder lag spills to disk.
+        private const val PCM_RING_SECONDS = 30
         private const val PCM_RING_CAPACITY_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * PCM_RING_SECONDS
-        private const val RING_FULL_WAIT_MS = 20L
+        private const val RING_FULL_FALLBACK_WAIT_MS = 10L
+
         private const val BACKLOG_WARN_MS = 1_500
         private const val BACKLOG_NOTICE_INTERVAL_MS = 3_000L
     }
