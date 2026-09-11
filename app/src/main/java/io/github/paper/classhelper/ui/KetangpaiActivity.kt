@@ -269,27 +269,28 @@ class KetangpaiActivity : AppCompatActivity() {
         passwordLayout.addView(passwordEdit)
         loginCard.second.addView(passwordLayout, matchParams(top = 10))
         loginButton = primaryButton("登录并记住密码")
-        loginCard.second.addView(loginButton, matchParams(top = 14, height = 54))
+        loginCard.second.addView(loginButton, matchParams(top = 14, heightDp = 56))
 
-        val courseCard = sectionCard("选择课程", "课程列表只显示课程名称；内部 ID 不展示。")
+        val courseCard = sectionCard("选择课程", "先选课程，再浏览资料或同步到本地知识库。")
         content.addView(courseCard.first, matchParams(top = 14))
         courseSpinner = Spinner(this).apply {
-            minimumHeight = dp(56)
-            setPadding(dp(12), 0, dp(12), 0)
+            minimumHeight = dp(60)
+            setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        courseCard.second.addView(courseSpinner, matchParams(top = 14, height = 56))
+        courseCard.second.addView(courseSpinner, matchParams(top = 14, heightDp = 60))
         courseMetaText = TextView(this).apply {
             text = "登录后会显示当前账号可访问的课堂派课程。"
             textSize = 12f
-            setPadding(dp(2), dp(8), dp(2), 0)
+            setLineSpacing(0f, 1.15f)
+            setPadding(dp(2), dp(10), dp(2), dp(2))
         }
         courseCard.second.addView(courseMetaText)
         refreshButton = outlinedButton("刷新课程列表")
-        courseCard.second.addView(refreshButton, matchParams(top = 14, height = 52))
+        courseCard.second.addView(refreshButton, matchParams(top = 14, heightDp = 54))
         browseButton = outlinedButton("浏览这门课的全部资料")
-        courseCard.second.addView(browseButton, matchParams(top = 10, height = 52))
+        courseCard.second.addView(browseButton, matchParams(top = 10, heightDp = 54))
         syncButton = primaryButton("增量同步课程资料")
-        courseCard.second.addView(syncButton, matchParams(top = 10, height = 56))
+        courseCard.second.addView(syncButton, matchParams(top = 10, heightDp = 58))
 
         val statusCard = sectionCard("状态", "同步只读取资料，不签到、不刷课、不提交作业。平台明确禁止下载的资料仅保留元数据。")
         content.addView(statusCard.first, matchParams(top = 14))
@@ -297,24 +298,24 @@ class KetangpaiActivity : AppCompatActivity() {
             visibility = View.GONE
             isIndeterminate = true
         }
-        statusCard.second.addView(progress, matchParams(top = 12, height = 4))
+        statusCard.second.addView(progress, matchParams(top = 12, heightDp = 4))
         statusText = TextView(this).apply {
             text = "尚未登录"
             textSize = 13f
             setLineSpacing(0f, 1.2f)
-            setPadding(0, dp(12), 0, 0)
+            setPadding(0, dp(12), 0, dp(2))
         }
         statusCard.second.addView(statusText)
 
         logoutButton = outlinedButton("退出课堂派并清除已保存登录信息")
-        content.addView(logoutButton, matchParams(top = 14, height = 52))
+        content.addView(logoutButton, matchParams(top = 16, heightDp = 56))
         renderCourseSpinner()
         return root
     }
 
     private fun sectionCard(title: String, subtitle: String): Pair<MaterialCardView, LinearLayout> {
         val card = MaterialCardView(this).apply {
-            radius = dp(26).toFloat()
+            radius = dp(22).toFloat()
             cardElevation = 0f
         }
         val body = LinearLayout(this).apply {
@@ -338,10 +339,12 @@ class KetangpaiActivity : AppCompatActivity() {
 
     private fun primaryButton(label: String): MaterialButton = MaterialButton(this).apply {
         text = label
-        minHeight = 0
+        isAllCaps = false
+        minHeight = dp(52)
         insetTop = 0
         insetBottom = 0
-        isAllCaps = false
+        cornerRadius = dp(14)
+        setPaddingRelative(dp(16), dp(6), dp(16), dp(6))
     }
 
     private fun outlinedButton(label: String): MaterialButton = MaterialButton(
@@ -350,14 +353,20 @@ class KetangpaiActivity : AppCompatActivity() {
         com.google.android.material.R.attr.materialButtonOutlinedStyle,
     ).apply {
         text = label
-        minHeight = 0
+        isAllCaps = false
+        minHeight = dp(52)
         insetTop = 0
         insetBottom = 0
-        isAllCaps = false
+        cornerRadius = dp(14)
+        setPaddingRelative(dp(16), dp(6), dp(16), dp(6))
     }
 
-    private fun matchParams(top: Int = 0, height: Int = LinearLayout.LayoutParams.WRAP_CONTENT): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height).apply { topMargin = dp(top) }
+    private fun matchParams(top: Int = 0, heightDp: Int? = null): LinearLayout.LayoutParams {
+        val height = heightDp?.let(::dp) ?: LinearLayout.LayoutParams.WRAP_CONTENT
+        return LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height).apply {
+            topMargin = dp(top)
+        }
+    }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
 }

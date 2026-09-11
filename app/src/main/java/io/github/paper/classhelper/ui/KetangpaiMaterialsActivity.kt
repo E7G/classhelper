@@ -81,14 +81,14 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
 
         resources.forEachIndexed { index, resource ->
             val card = MaterialCardView(this).apply {
-                radius = dp(22).toFloat()
+                radius = dp(20).toFloat()
                 cardElevation = 0f
                 isClickable = resource.canFetchBody
                 isFocusable = resource.canFetchBody
             }
             val body = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(16), dp(15), dp(16), dp(15))
+                setPadding(dp(16), dp(16), dp(16), dp(16))
             }
             body.addView(TextView(this).apply {
                 text = resource.name
@@ -107,7 +107,8 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
                     }
                 }
                 textSize = 12f
-                setPadding(0, dp(5), 0, dp(10))
+                setLineSpacing(0f, 1.15f)
+                setPadding(0, dp(6), 0, dp(12))
             })
             val preview = MaterialButton(this).apply {
                 text = when {
@@ -117,19 +118,21 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
                     else -> "下载并打开"
                 }
                 isAllCaps = false
-                minHeight = 0
+                minHeight = dp(52)
                 insetTop = 0
                 insetBottom = 0
+                cornerRadius = dp(14)
+                setPaddingRelative(dp(16), dp(6), dp(16), dp(6))
                 isEnabled = resource.canFetchBody
                 setOnClickListener { openResource(resource, this) }
             }
-            body.addView(preview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)))
+            body.addView(preview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(54)))
             card.addView(body)
             card.setOnClickListener { if (preview.isEnabled) preview.performClick() }
             materialsBody.addView(
                 card,
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = if (index == 0) dp(10) else dp(8)
+                    topMargin = if (index == 0) dp(10) else dp(10)
                 },
             )
         }
@@ -215,10 +218,10 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(topBar)
 
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply { clipToPadding = false }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), dp(14), dp(2), dp(24))
+            setPadding(dp(2), dp(14), dp(2), dp(28))
         }
         scroll.addView(body)
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -231,11 +234,12 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
         body.addView(TextView(this).apply {
             text = "整门课的课件、资料与附件会平铺显示。PDF 直接进入课堂助手阅读器；其他可访问文件下载后交给系统应用打开。平台明确禁止下载的资料只显示名称和来源，不读取正文。"
             textSize = 13f
-            setPadding(0, dp(7), 0, dp(12))
+            setLineSpacing(0f, 1.18f)
+            setPadding(0, dp(7), 0, dp(14))
         })
 
         refreshButton = outlined("刷新全部资料")
-        body.addView(refreshButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)))
+        body.addView(refreshButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(54)))
         progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             isIndeterminate = true
@@ -244,6 +248,7 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
         statusText = TextView(this).apply {
             text = "正在准备…"
             textSize = 13f
+            setLineSpacing(0f, 1.15f)
             setPadding(dp(2), dp(10), dp(2), dp(4))
         }
         body.addView(statusText)
@@ -259,9 +264,11 @@ class KetangpaiMaterialsActivity : AppCompatActivity() {
     ).apply {
         text = label
         isAllCaps = false
-        minHeight = 0
+        minHeight = dp(50)
         insetTop = 0
         insetBottom = 0
+        cornerRadius = dp(14)
+        setPaddingRelative(dp(14), dp(6), dp(14), dp(6))
     }
 
     private fun safeName(raw: String): String = raw.replace(Regex("[^\\p{L}\\p{N}._() -]"), "_").take(120)
