@@ -13,9 +13,15 @@ data class KetangpaiResource(
     val size: String = "",
     val contentType: String = "",
     val sourceTitle: String = "",
+    /** False only when the API payload explicitly marks the resource as not downloadable. */
+    val downloadAllowed: Boolean = true,
+    val restrictionReason: String = "",
 ) {
     val extension: String
         get() = name.substringAfterLast('.', "").lowercase()
+
+    val canFetchBody: Boolean
+        get() = downloadAllowed && url.isNotBlank()
 }
 
 data class KetangpaiSyncResult(
@@ -25,4 +31,6 @@ data class KetangpaiSyncResult(
     val extractedPdfPages: Int,
     val importedOfficeSections: Int,
     val failedFiles: Int,
+    val skippedRestrictedFiles: Int = 0,
+    val reusedCachedFiles: Int = 0,
 )

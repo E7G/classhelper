@@ -101,7 +101,9 @@ class KetangpaiClient(private val settings: SettingsStore) {
         fun addAll(items: List<KetangpaiResource>) {
             items.forEach { r ->
                 val key = r.url.ifBlank { r.id.ifBlank { r.name + "|" + r.sourceTitle } }
-                result.putIfAbsent(key, r)
+                val previous = result[key]
+                // Prefer the accessible copy when the same attachment appears in multiple API sections.
+                if (previous == null || (!previous.downloadAllowed && r.downloadAllowed)) result[key] = r
             }
         }
 
@@ -113,7 +115,9 @@ class KetangpaiClient(private val settings: SettingsStore) {
                 for (i in 0 until nav.length()) {
                     val value = nav.optJSONObject(i)?.opt("contenttype") ?: continue
                     when (value) {
-                        is JSONArray -> for (j in 0 until value.length()) value.opt(j)?.toString()?.takeIf { it.isNotBlank() && it != "0" }?.let(contentTypes::add)
+                        is JSONArray -> for (j in 0 until value.length()) {
+                            value.opt(j)?.toString()?.takeIf { it.isNotBlank() && it != "0" }?.let(contentTypes::add)
+                        }
                         else -> value.toString().takeIf { it.isNotBlank() && it != "0" }?.let(contentTypes::add)
                     }
                 }
@@ -123,7 +127,7 @@ class KetangpaiClient(private val settings: SettingsStore) {
         contentTypes.forEach { type -> addAll(fetchCourseContent(course.id, type)) }
         addAll(fetchCourseContent(course.id, null))
         addAll(fetchCourseware(course.id))
-        result.values.toList()
+        result.values.sortedWith(compareBy<KetangpaiResource> { it.sourceTitle }.thenBy { it.name })
     }
 
     fun logout(clearCredentials: Boolean = true) {
@@ -136,6 +140,7 @@ class KetangpaiClient(private val settings: SettingsStore) {
     }
 
     fun downloadResource(resource: KetangpaiResource, file: java.io.File, maxBytes: Long): Boolean {
+        if (!resource.downloadAllowed) return false
         val url = normalizeUrl(resource.url)
         if (url.isBlank()) return false
         val request = Request.Builder().url(url)
@@ -158,17 +163,24 @@ class KetangpaiClient(private val settings: SettingsStore) {
                             val n = input.read(buffer)
                             if (n < 0) break
                             total += n
-                            if (total > maxBytes) { tooLarge = true; break }
+                            if (total > maxBytes) {
+                                tooLarge = true
+                                break
+                            }
                             output.write(buffer, 0, n)
                         }
                     }
                 }
                 if (tooLarge || file.length() <= 0L) {
-                    file.delete(); false
-                } else true
+                    file.delete()
+                    false
+                } else {
+                    true
+                }
             }
         } catch (_: Throwable) {
-            file.delete(); false
+            file.delete()
+            false
         }
     }
 
@@ -219,37 +231,74 @@ class KetangpaiClient(private val settings: SettingsStore) {
         return out
     }
 
-    private fun collectResources(item: JSONObject?, contentType: String, out: MutableList<KetangpaiResource>) {
+    private fun collectResources(
+        item: JSONObject?,
+        contentType: String,
+        out: MutableList<KetangpaiResource>,
+        inheritedRestriction: String = "",
+    ) {
         if (item == null) return
         val sourceTitle = firstString(item, "title", "name", "coursename")
+        val restriction = inheritedRestriction.ifBlank { explicitDownloadRestriction(item) }
         val attachments = item.optJSONArray("attachment") ?: item.optJSONArray("attachments")
         if (attachments != null) {
             for (i in 0 until attachments.length()) {
                 val att = attachments.optJSONObject(i) ?: continue
-                resourceFrom(att, sourceTitle, contentType)?.let(out::add)
+                resourceFrom(att, sourceTitle, contentType, restriction)?.let(out::add)
             }
         } else {
-            resourceFrom(item, sourceTitle, contentType)?.let(out::add)
+            resourceFrom(item, sourceTitle, contentType, restriction)?.let(out::add)
         }
         val children = item.optJSONArray("children")
-        if (children != null) for (i in 0 until children.length()) collectResources(children.optJSONObject(i), contentType, out)
+        if (children != null) {
+            for (i in 0 until children.length()) {
+                collectResources(children.optJSONObject(i), contentType, out, restriction)
+            }
+        }
     }
 
-    private fun resourceFrom(obj: JSONObject, sourceTitle: String, contentType: String): KetangpaiResource? {
-        val url = normalizeUrl(firstString(obj, "url", "fileurl", "fileUrl", "downloadurl", "downloadUrl", "ossurl", "ossUrl"))
+    private fun resourceFrom(
+        obj: JSONObject,
+        sourceTitle: String,
+        contentType: String,
+        inheritedRestriction: String,
+    ): KetangpaiResource? {
+        val ownRestriction = explicitDownloadRestriction(obj)
+        val restriction = inheritedRestriction.ifBlank { ownRestriction }
+        val rawUrl = normalizeUrl(firstString(obj, "url", "fileurl", "fileUrl", "downloadurl", "downloadUrl", "ossurl", "ossUrl"))
         val name = firstString(obj, "name", "filename", "fileName", "title").ifBlank { sourceTitle }
-        if (url.isBlank() && name.isBlank()) return null
+        if (rawUrl.isBlank() && name.isBlank()) return null
         val id = firstString(obj, "id", "fileid", "fileId", "attachmentid", "attachmentId").ifBlank {
-            sha256(url.ifBlank { "$name|$sourceTitle" }).take(24)
+            sha256(rawUrl.ifBlank { "$name|$sourceTitle" }).take(24)
         }
+        val allowed = restriction.isBlank()
         return KetangpaiResource(
             id = id,
             name = name.ifBlank { "课堂派资料" },
-            url = url,
+            // Do not retain a direct download URL when the payload explicitly denies download.
+            url = if (allowed) rawUrl else "",
             size = firstString(obj, "size", "filesize", "fileSize"),
             contentType = contentType,
             sourceTitle = sourceTitle,
+            downloadAllowed = allowed,
+            restrictionReason = restriction,
         )
+    }
+
+    private fun explicitDownloadRestriction(obj: JSONObject): String {
+        for (key in DOWNLOAD_PERMISSION_KEYS) {
+            if (!obj.has(key)) continue
+            val value = obj.opt(key)
+            if (isFalseLike(value)) return "$key=${value?.toString().orEmpty()}"
+        }
+        return ""
+    }
+
+    private fun isFalseLike(value: Any?): Boolean = when (value) {
+        null, JSONObject.NULL -> false
+        is Boolean -> !value
+        is Number -> value.toInt() == 0
+        else -> value.toString().trim().lowercase() in FALSE_PERMISSION_VALUES
     }
 
     private fun parseCourses(value: Any?): List<KetangpaiCourse> {
@@ -326,5 +375,25 @@ class KetangpaiClient(private val settings: SettingsStore) {
         private const val MAX_PAGES = 30
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/152.0 Mobile Safari/537.36 ClassHelper/1.0"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+        private val DOWNLOAD_PERMISSION_KEYS = arrayOf(
+            "canDownload",
+            "allowDownload",
+            "downloadable",
+            "isDownload",
+            "isdownload",
+            "can_download",
+            "allow_download",
+        )
+        private val FALSE_PERMISSION_VALUES = setOf(
+            "0",
+            "false",
+            "no",
+            "off",
+            "deny",
+            "denied",
+            "disabled",
+            "forbid",
+            "forbidden",
+        )
     }
 }

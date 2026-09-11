@@ -3,4 +3,7 @@
     <files-path
         name="chaoxing_view"
         path="chaoxing-view/" />
+    <files-path
+        name="ketangpai_view"
+        path="ketangpai-view/" />
 </paths>

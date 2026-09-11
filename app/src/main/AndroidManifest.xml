@@ -34,6 +34,9 @@
             android:name=".ui.KetangpaiActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.KetangpaiMaterialsActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.LibraryActivity"
             android:exported="false" />
         <activity

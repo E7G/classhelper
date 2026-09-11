@@ -27,7 +27,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 
-/** Account login and read-only KETANGPAI course-resource synchronization. */
+/** Account login, resource browsing and read-only KETANGPAI course-resource synchronization. */
 class KetangpaiActivity : AppCompatActivity() {
     private lateinit var app: ClassHelperApp
     private lateinit var client: KetangpaiClient
@@ -36,6 +36,7 @@ class KetangpaiActivity : AppCompatActivity() {
     private lateinit var passwordLayout: TextInputLayout
     private lateinit var loginButton: MaterialButton
     private lateinit var refreshButton: MaterialButton
+    private lateinit var browseButton: MaterialButton
     private lateinit var syncButton: MaterialButton
     private lateinit var logoutButton: MaterialButton
     private lateinit var courseSpinner: Spinner
@@ -87,6 +88,15 @@ class KetangpaiActivity : AppCompatActivity() {
             }
         }
 
+        browseButton.setOnClickListener {
+            val course = selectedCourse()
+            if (course == null) {
+                statusText.text = "请先登录并选择课程"
+            } else {
+                startActivity(KetangpaiMaterialsActivity.intentFor(this, course))
+            }
+        }
+
         syncButton.setOnClickListener {
             val course = selectedCourse()
             if (course == null) {
@@ -100,10 +110,14 @@ class KetangpaiActivity : AppCompatActivity() {
                     sync.sync(client, course) { message -> runOnUiThread { statusText.text = message } }
                 }.onSuccess { result ->
                     app.graph.knowledge.invalidate(result.documentId)
-                    val failed = if (result.failedFiles > 0) " · ${result.failedFiles} 个文件未能提取正文" else ""
+                    val details = buildString {
+                        if (result.reusedCachedFiles > 0) append(" · 复用缓存 ${result.reusedCachedFiles}")
+                        if (result.skippedRestrictedFiles > 0) append(" · 权限限制 ${result.skippedRestrictedFiles}")
+                        if (result.failedFiles > 0) append(" · 提取失败 ${result.failedFiles}")
+                    }
                     setBusy(
                         false,
-                        "同步完成 · ${result.resources} 个资料 · ${result.indexedChunks} 个知识片段 · PDF ${result.extractedPdfPages} 页 · Office ${result.importedOfficeSections} 段$failed\n课堂问答会优先使用当前 PDF，其次使用这门课堂派课程资料。",
+                        "同步完成 · ${result.resources} 个资料 · ${result.indexedChunks} 个知识片段 · PDF ${result.extractedPdfPages} 页 · Office ${result.importedOfficeSections} 段$details\n课堂问答会优先使用当前 PDF，其次使用这门课堂派课程资料。未变化资料下次同步会复用本地缓存。",
                     )
                     renderSavedState()
                 }.onFailure {
@@ -126,6 +140,7 @@ class KetangpaiActivity : AppCompatActivity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 renderCourseMeta(courses.getOrNull(position))
             }
+
             override fun onNothingSelected(parent: AdapterView<*>?) = renderCourseMeta(null)
         }
     }
@@ -135,7 +150,7 @@ class KetangpaiActivity : AppCompatActivity() {
             .onSuccess { loaded ->
                 courses = loaded
                 renderCourseSpinner()
-                setBusy(false, "已读取 ${loaded.size} 门课程 · 选择课程后可同步全部可访问资料")
+                setBusy(false, "已读取 ${loaded.size} 门课程 · 可先浏览资料，再同步到本地课堂知识库")
             }
             .onFailure { setBusy(false, "课程读取失败：${it.message ?: it.javaClass.simpleName}") }
     }
@@ -165,6 +180,7 @@ class KetangpaiActivity : AppCompatActivity() {
         }
         val enabled = courses.isNotEmpty()
         courseSpinner.isEnabled = enabled
+        browseButton.isEnabled = enabled
         syncButton.isEnabled = enabled
         refreshButton.isEnabled = app.graph.settings.ketangpaiToken.isNotBlank() || app.graph.settings.ketangpaiAccount.isNotBlank()
         val selected = courses.indexOfFirst { it.id == app.graph.settings.ketangpaiCourseId }
@@ -174,8 +190,8 @@ class KetangpaiActivity : AppCompatActivity() {
     private fun renderCourseMeta(course: KetangpaiCourse?) {
         courseMetaText.text = when {
             course == null -> "登录后会显示当前账号可访问的课堂派课程。"
-            course.teacher.isNotBlank() -> "教师：${course.teacher} · 同步会读取课程资料、课件及附件。"
-            else -> "同步会汇总课程资料、课件及附件到本地课堂知识库。"
+            course.teacher.isNotBlank() -> "教师：${course.teacher} · 可以浏览课件/附件，或同步可访问正文到本地知识库。"
+            else -> "可以先浏览整门课的课件/附件，再同步可访问正文到本地知识库。"
         }
     }
 
@@ -184,6 +200,7 @@ class KetangpaiActivity : AppCompatActivity() {
         progress.isIndeterminate = busy
         loginButton.isEnabled = !busy
         refreshButton.isEnabled = !busy && (app.graph.settings.ketangpaiToken.isNotBlank() || app.graph.settings.ketangpaiAccount.isNotBlank())
+        browseButton.isEnabled = !busy && courses.isNotEmpty()
         syncButton.isEnabled = !busy && courses.isNotEmpty()
         logoutButton.isEnabled = !busy
         courseSpinner.isEnabled = !busy && courses.isNotEmpty()
@@ -225,7 +242,7 @@ class KetangpaiActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
         })
         content.addView(TextView(this).apply {
-            text = "登录自己的课堂派账号后，读取课程中当前账号能正常访问的资料。PDF、DOCX、PPTX 和文本资料会尽量提取正文进入课堂知识库；当前打开的 PDF 仍然保持最高检索优先级。"
+            text = "登录自己的课堂派账号后，可先浏览整门课程的资料，再把可访问的 PDF、DOCX、PPTX 和文本正文同步进课堂知识库。同步会缓存未变化文件，减少重复下载；当前打开的 PDF 仍保持最高检索优先级。"
             textSize = 13f
             setLineSpacing(0f, 1.18f)
             setPadding(0, dp(8), 0, dp(4))
@@ -269,10 +286,12 @@ class KetangpaiActivity : AppCompatActivity() {
         courseCard.second.addView(courseMetaText)
         refreshButton = outlinedButton("刷新课程列表")
         courseCard.second.addView(refreshButton, matchParams(top = 14, height = 52))
-        syncButton = primaryButton("同步课程全部资料")
+        browseButton = outlinedButton("浏览这门课的全部资料")
+        courseCard.second.addView(browseButton, matchParams(top = 10, height = 52))
+        syncButton = primaryButton("增量同步课程资料")
         courseCard.second.addView(syncButton, matchParams(top = 10, height = 56))
 
-        val statusCard = sectionCard("状态", "同步只读取资料，不签到、不刷课、不提交作业。")
+        val statusCard = sectionCard("状态", "同步只读取资料，不签到、不刷课、不提交作业。平台明确禁止下载的资料仅保留元数据。")
         content.addView(statusCard.first, matchParams(top = 14))
         progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
