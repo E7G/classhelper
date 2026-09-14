@@ -7,10 +7,12 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+
 
 data class ChaoxingMaterial(
     val chapterTitle: String,
@@ -69,45 +71,136 @@ class ChaoxingMaterialRepository(
         chapter: ChaoxingChapter,
     ): List<ChaoxingMaterial> {
         val out = LinkedHashMap<String, ChaoxingMaterial>()
-        val count = client.cardCount(course, chapter)
-        for (page in 0 until count) {
-            val card = runCatching { client.loadCard(course, chapter, page) }.getOrNull() ?: continue
-            val attachments = card.optJSONArray("attachments") ?: JSONArray()
-            for (i in 0 until attachments.length()) {
-                val attachment = attachments.optJSONObject(i) ?: continue
-                val property = attachment.optJSONObject("property") ?: JSONObject()
-                val type = attachment.optString("type").trim().ifBlank {
-                    if (property.optString("bookname").isNotBlank()) "book" else "resource"
+        val count = runCatching { client.cardCount(course, chapter) }.getOrDefault(0)
+
+        suspend fun scanPages(pages: Iterable<Int>) {
+            for (page in pages) {
+                val card = runCatching { client.loadCard(course, chapter, page) }.getOrNull() ?: continue
+                val attachments = collectAttachments(card)
+                for (i in attachments.indices) {
+                    val attachment = attachments[i]
+                    parseMaterial(chapter, attachment, page, i)?.let { material ->
+                        out.putIfAbsent(materialIdentity(material), material)
+                    }
                 }
-                val name = sequenceOf(
-                    property.optString("name"),
-                    property.optString("bookname"),
-                    property.optString("title"),
-                    attachment.optString("name"),
-                ).map { it.trim() }.firstOrNull { it.isNotBlank() }
-                    ?: "${type.ifBlank { "资料" }} ${i + 1}"
-                val objectId = property.optString("objectid").trim().takeIf { it.isNotBlank() }
-                val directUrl = sequenceOf(
-                    property.optString("url"),
-                    property.optString("downloadUrl"),
-                    property.optString("href"),
-                    attachment.optString("url"),
-                    attachment.optString("downloadUrl"),
-                ).map { it.trim() }.firstOrNull { it.startsWith("http://") || it.startsWith("https://") }
-                val material = ChaoxingMaterial(
-                    chapterTitle = chapter.title,
-                    name = name,
-                    type = type,
-                    objectId = objectId,
-                    directUrl = directUrl,
-                )
-                val key = objectId?.let { "id:$it" }
-                    ?: directUrl?.let { "url:${name.lowercase()}|$it" }
-                    ?: "local:${chapter.title}|$name|$page|$i"
-                out.putIfAbsent(key, material)
             }
         }
+
+        // The common response uses zero-based num values.
+        if (count > 0) scanPages(0 until count) else scanPages(listOf(0))
+
+        // Some Chaoxing deployments expose cardcount but expect num to be one-based (or omit
+        // cardcount altogether). Only probe the alternate numbering when the normal scan found
+        // nothing, keeping ordinary courses fast while fixing false "no material" results.
+        if (out.isEmpty()) {
+            if (count > 0) scanPages(1..count) else scanPages(listOf(1))
+        }
         return out.values.toList()
+    }
+
+    /**
+     * mArg has changed shape across Chaoxing deployments. Attachments may be directly under the
+     * root, inside card/data objects, or nested one level deeper. Walk the JSON tree and collect
+     * every array named "attachments" instead of assuming one fixed response layout.
+     */
+    private fun collectAttachments(root: JSONObject): List<JSONObject> {
+        val out = ArrayList<JSONObject>()
+        val seen = HashSet<String>()
+
+        fun add(array: JSONArray) {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val signature = obj.toString()
+                if (seen.add(signature)) out += obj
+            }
+        }
+
+        fun walk(value: Any?, depth: Int) {
+            if (value == null || depth > 7) return
+            when (value) {
+                is JSONObject -> {
+                    val keys = value.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val child = value.opt(key)
+                        if (key.equals("attachments", ignoreCase = true) && child is JSONArray) add(child)
+                        else if (child is JSONObject || child is JSONArray) walk(child, depth + 1)
+                    }
+                }
+                is JSONArray -> for (i in 0 until value.length()) walk(value.opt(i), depth + 1)
+            }
+        }
+
+        walk(root, 0)
+        return out
+    }
+
+    private fun parseMaterial(
+        chapter: ChaoxingChapter,
+        attachment: JSONObject,
+        page: Int,
+        index: Int,
+    ): ChaoxingMaterial? {
+        val property = attachment.optJSONObject("property") ?: JSONObject()
+        val data = attachment.optJSONObject("data") ?: JSONObject()
+        val propertyData = property.optJSONObject("data") ?: JSONObject()
+        val candidates = listOf(property, attachment, data, propertyData)
+
+        val type = firstText(candidates, TYPE_KEYS).ifBlank {
+            if (firstText(candidates, listOf("bookname")).isNotBlank()) "book" else "resource"
+        }
+        val name = firstText(candidates, NAME_KEYS).ifBlank { "${type.ifBlank { "资料" }} ${index + 1}" }
+        val objectId = firstText(candidates, OBJECT_ID_KEYS).takeIf { it.isNotBlank() }
+        val directUrl = firstHttpUrl(candidates)
+            ?: objectIdFromUrl(firstText(candidates, URL_KEYS))?.let { null }
+        val urlObjectId = objectId ?: directUrl?.let(::objectIdFromUrl)
+
+        // Keep named attachment entries even when no address is currently available. This makes
+        // the UI accurately show that the file exists, while preview remains enabled whenever an
+        // object id or URL can be resolved.
+        return ChaoxingMaterial(
+            chapterTitle = chapter.title,
+            name = name,
+            type = type,
+            objectId = urlObjectId,
+            directUrl = directUrl,
+        )
+    }
+
+    private fun firstText(objects: List<JSONObject>, keys: List<String>): String {
+        for (obj in objects) {
+            for (key in keys) {
+                val raw = obj.opt(key) ?: continue
+                val value = when (raw) {
+                    is String -> raw
+                    is Number -> raw.toString()
+                    else -> continue
+                }.trim()
+                if (value.isNotBlank() && !value.equals("null", ignoreCase = true)) return value
+            }
+        }
+        return ""
+    }
+
+    private fun firstHttpUrl(objects: List<JSONObject>): String? {
+        for (obj in objects) {
+            for (key in URL_KEYS) {
+                val value = obj.optString(key).trim()
+                if (value.startsWith("http://") || value.startsWith("https://")) return value
+            }
+        }
+        return null
+    }
+
+    private fun objectIdFromUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        val parsed = url.toHttpUrlOrNull()
+        val queryId = sequenceOf("objectid", "objectId", "objectID", "oid")
+            .mapNotNull { parsed?.queryParameter(it)?.trim() }
+            .firstOrNull { it.isNotBlank() }
+        if (!queryId.isNullOrBlank()) return queryId
+        return Regex("(?i)/ananas/(?:status|modules/[^/]+)/(?:[^/?#]*/)?([0-9a-f]{16,})")
+            .find(url)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
     }
 
     private fun materialIdentity(material: ChaoxingMaterial): String =
@@ -205,6 +298,13 @@ class ChaoxingMaterialRepository(
         .ifBlank { "resource" }
 
     companion object {
+        private val OBJECT_ID_KEYS = listOf("objectid", "objectId", "objectID", "object_id", "oid")
+        private val NAME_KEYS = listOf("name", "filename", "fileName", "title", "bookname")
+        private val TYPE_KEYS = listOf("type", "module", "fileType", "suffix")
+        private val URL_KEYS = listOf(
+            "url", "downloadUrl", "downloadurl", "downloadURL", "download_url", "href",
+            "fileUrl", "fileURL", "fileurl", "pdf", "http", "httphd", "previewUrl", "previewURL",
+        )
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/152.0 Mobile Safari/537.36 ClassHelper/1.0"
         private const val MIN_VALID_PDF_BYTES = 1024L
         private const val MAX_VIEW_PDF_BYTES = 160L * 1024L * 1024L
