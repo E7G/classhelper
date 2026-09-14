@@ -90,6 +90,7 @@ class LocalZipformerAsrEngine(
     private var activeModelDir: File? = null
     private var lastPartial = ""
     private var speechStatusShown = false
+    private var utteranceAcceptedSamples = 0L
 
     fun health(): Health {
         val now = SystemClock.elapsedRealtime()
@@ -114,6 +115,7 @@ class LocalZipformerAsrEngine(
         lastDecodeActivityMs = now
         decoderBusy = false
         spoolFailureReported = false
+        utteranceAcceptedSamples = 0L
         dispatchState("正在加载 Zipformer 流式中文模型…")
 
         val dir = models.modelDirectory()
@@ -144,17 +146,18 @@ class LocalZipformerAsrEngine(
                 val config = OnlineRecognizerConfig(
                     featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80, dither = 0.0f),
                     modelConfig = modelConfig,
-                    // Keep the recognition semantics at the proven v1.9.x profile. This redesign
-                    // intentionally changes transport/scheduling only, so quality regressions can be
-                    // attributed and tested without confounding endpoint changes.
+                    // Classroom speech contains frequent short pauses between phrases. The previous
+                    // 0.75 s endpoint aggressively reset the recognizer and could turn one sentence
+                    // into many 1-3 character finals. Use a conservative endpoint and an additional
+                    // short-fragment guard below so completeness wins over sub-second final latency.
                     endpointConfig = EndpointConfig(
-                        rule1 = EndpointRule(false, 2.0f, 0.0f),
-                        rule2 = EndpointRule(true, 0.75f, 0.0f),
-                        rule3 = EndpointRule(false, 0.0f, 18.0f),
+                        rule1 = EndpointRule(false, 3.0f, 0.0f),
+                        rule2 = EndpointRule(true, 1.60f, 0.0f),
+                        rule3 = EndpointRule(false, 0.0f, 30.0f),
                     ),
                     enableEndpoint = true,
-                    decodingMethod = if (hotwords.isBlank()) "greedy_search" else "modified_beam_search",
-                    maxActivePaths = if (hotwords.isBlank()) 1 else 4,
+                    decodingMethod = "modified_beam_search",
+                    maxActivePaths = 4,
                     hotwordsScore = 2.0f,
                 )
                 val createdRecognizer = OnlineRecognizer(assetManager = null, config = config)
@@ -163,6 +166,7 @@ class LocalZipformerAsrEngine(
                 stream = createdStream
                 lastPartial = ""
                 speechStatusShown = false
+                utteranceAcceptedSamples = 0L
                 lastBacklogNoticeMs = 0L
                 lastDecodeActivityMs = SystemClock.elapsedRealtime()
                 if (running.get()) {
@@ -488,9 +492,10 @@ class LocalZipformerAsrEngine(
         decoderBusy = true
         return try {
             current.acceptWaveform(samples, SAMPLE_RATE)
+            utteranceAcceptedSamples += samples.size
             decodeReady(rec, current)
             publishResult(rec, current)
-            if (rec.isEndpoint(current)) finalizeEndpoint(rec, current)
+            if (rec.isEndpoint(current) && shouldFinalizeEndpoint()) finalizeEndpoint(rec, current)
             lastDecodeActivityMs = SystemClock.elapsedRealtime()
             true
         } catch (t: Throwable) {
@@ -519,12 +524,37 @@ class LocalZipformerAsrEngine(
         }
     }
 
+    /**
+     * Native endpoint detection is intentionally not trusted for very short fragments. A short
+     * breathing pause used to produce finals such as “我们” / “然后” and reset all following
+     * context. Keep the same stream alive until either enough text or enough utterance audio has
+     * accumulated. AudioRecord continues feeding silence, so a genuinely short utterance still
+     * finalizes after the guard interval instead of getting stuck forever.
+     */
+    private fun shouldFinalizeEndpoint(): Boolean {
+        val meaningfulChars = lastPartial.count { !it.isWhitespace() && !it.isPunctuationLike() }
+        val audioMs = utteranceAcceptedSamples * 1000L / SAMPLE_RATE
+        return meaningfulChars >= MIN_ENDPOINT_CHARS || audioMs >= MIN_ENDPOINT_AUDIO_MS
+    }
+
+    private fun Char.isPunctuationLike(): Boolean = when (Character.getType(this)) {
+        Character.CONNECTOR_PUNCTUATION.toInt(),
+        Character.DASH_PUNCTUATION.toInt(),
+        Character.START_PUNCTUATION.toInt(),
+        Character.END_PUNCTUATION.toInt(),
+        Character.INITIAL_QUOTE_PUNCTUATION.toInt(),
+        Character.FINAL_QUOTE_PUNCTUATION.toInt(),
+        Character.OTHER_PUNCTUATION.toInt() -> true
+        else -> false
+    }
+
     private fun finalizeEndpoint(rec: OnlineRecognizer, current: OnlineStream) {
         val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
         if (finalText.isNotBlank()) dispatchFinal(finalText)
         rec.reset(current)
         lastPartial = ""
         speechStatusShown = false
+        utteranceAcceptedSamples = 0L
         dispatchState("Zipformer 已就绪 · 等待讲话")
     }
 
@@ -548,6 +578,7 @@ class LocalZipformerAsrEngine(
                         }
                         val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
                         lastPartial = ""
+                        utteranceAcceptedSamples = 0L
                         if (finalText.isNotBlank()) {
                             dispatchFinal(finalText, onFinished)
                             return@execute
@@ -628,6 +659,7 @@ class LocalZipformerAsrEngine(
         recognizer = null
         lastPartial = ""
         speechStatusShown = false
+        utteranceAcceptedSamples = 0L
         decoderBusy = false
         activeModelDir = null
     }
@@ -700,5 +732,8 @@ class LocalZipformerAsrEngine(
 
         private const val BACKLOG_WARN_MS = 1_500
         private const val BACKLOG_NOTICE_INTERVAL_MS = 3_000L
+
+        private const val MIN_ENDPOINT_CHARS = 5
+        private const val MIN_ENDPOINT_AUDIO_MS = 3_200L
     }
 }
