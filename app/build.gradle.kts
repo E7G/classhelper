@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 219
-        versionName = "1.12.4-chaoxing-preview"
+        versionCode = 220
+        versionName = "1.12.5-chaoxing-asr"
         vectorDrawables.useSupportLibrary = true
     }
 
