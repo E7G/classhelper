@@ -78,8 +78,7 @@ class ChaoxingMaterialRepository(
                 val card = runCatching { client.loadCard(course, chapter, page) }.getOrNull() ?: continue
                 val attachments = collectAttachments(card)
                 for (i in attachments.indices) {
-                    val attachment = attachments[i]
-                    parseMaterial(chapter, attachment, page, i)?.let { material ->
+                    parseMaterial(chapter, attachments[i], i)?.let { material ->
                         out.putIfAbsent(materialIdentity(material), material)
                     }
                 }
@@ -138,9 +137,8 @@ class ChaoxingMaterialRepository(
     private fun parseMaterial(
         chapter: ChaoxingChapter,
         attachment: JSONObject,
-        page: Int,
         index: Int,
-    ): ChaoxingMaterial? {
+    ): ChaoxingMaterial {
         val property = attachment.optJSONObject("property") ?: JSONObject()
         val data = attachment.optJSONObject("data") ?: JSONObject()
         val propertyData = property.optJSONObject("data") ?: JSONObject()
@@ -150,10 +148,9 @@ class ChaoxingMaterialRepository(
             if (firstText(candidates, listOf("bookname")).isNotBlank()) "book" else "resource"
         }
         val name = firstText(candidates, NAME_KEYS).ifBlank { "${type.ifBlank { "资料" }} ${index + 1}" }
-        val objectId = firstText(candidates, OBJECT_ID_KEYS).takeIf { it.isNotBlank() }
         val directUrl = firstHttpUrl(candidates)
-            ?: objectIdFromUrl(firstText(candidates, URL_KEYS))?.let { null }
-        val urlObjectId = objectId ?: directUrl?.let(::objectIdFromUrl)
+        val objectId = firstText(candidates, OBJECT_ID_KEYS).takeIf { it.isNotBlank() }
+            ?: objectIdFromUrl(directUrl)
 
         // Keep named attachment entries even when no address is currently available. This makes
         // the UI accurately show that the file exists, while preview remains enabled whenever an
@@ -162,7 +159,7 @@ class ChaoxingMaterialRepository(
             chapterTitle = chapter.title,
             name = name,
             type = type,
-            objectId = urlObjectId,
+            objectId = objectId,
             directUrl = directUrl,
         )
     }
