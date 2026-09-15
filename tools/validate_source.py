@@ -53,8 +53,8 @@ for forbidden, label in [
 # Basic source completeness checks for critical features.
 critical = {
     'AudioRecord': 'app/src/main/java/io/github/paper/classhelper/audio/AudioCapture.kt',
-    'OnlineRecognizer': 'app/src/main/java/io/github/paper/classhelper/asr/LocalZipformerAsrEngine.kt',
-    'encoder.int8.onnx': 'app/src/main/java/io/github/paper/classhelper/asr/AsrModelManager.kt',
+    'OfflineRecognizer': 'app/src/main/java/io/github/paper/classhelper/asr/LocalSenseVoiceAsrEngine.kt',
+    'model.int8.onnx': 'app/src/main/java/io/github/paper/classhelper/asr/AsrModelManager.kt',
     'tokens.txt': 'app/src/main/java/io/github/paper/classhelper/asr/AsrModelManager.kt',
     'ContextCompat.startForegroundService': 'app/src/main/java/io/github/paper/classhelper/asr/AsrModelManager.kt',
     'RandomAccessFile': 'app/src/main/java/io/github/paper/classhelper/asr/AsrModelManager.kt',
@@ -91,31 +91,29 @@ for marker in ['@+id/topChrome', '@+id/bottomChrome', '@+id/sidePanelScroll', '@
     if marker not in reader_layout:
         errors.append(f'Reader UI regression: missing immersive/unified-sidebar marker {marker}')
 
-# v1.9 ASR regression checks: true streaming Zipformer Transducer must stay wired.
+# v1.10 ASR regression checks: SenseVoice + long-utterance VAD is the active accuracy path.
 asr_manager = (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/AsrModelManager.kt').read_text(errors='ignore')
 service_text = (ROOT/'app/src/main/java/io/github/paper/classhelper/classroom/ClassroomService.kt').read_text(errors='ignore')
-zip_engine = ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalZipformerAsrEngine.kt'
-if 'streaming-zipformer-zh-int8-2025-06-30' not in asr_manager:
-    errors.append('ASR regression: streaming Zipformer 2025-06-30 model id missing')
-for required in ['encoder.int8.onnx', 'decoder.onnx', 'joiner.int8.onnx', 'tokens.txt']:
+voice_engine = ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalSenseVoiceAsrEngine.kt'
+if 'sensevoice-small-int8-2024-07-17' not in asr_manager:
+    errors.append('ASR regression: SenseVoiceSmall 2024-07-17 model id missing')
+for required in ['model.int8.onnx', 'tokens.txt', 'silero_vad.onnx']:
     if required not in asr_manager:
-        errors.append(f'ASR regression: Zipformer model file missing: {required}')
-zip_text = zip_engine.read_text(errors='ignore') if zip_engine.exists() else ''
+        errors.append(f'ASR regression: SenseVoice model file missing: {required}')
+voice_text = voice_engine.read_text(errors='ignore') if voice_engine.exists() else ''
 for marker in [
-    'OnlineRecognizer',
-    'OnlineTransducerModelConfig',
-    'current.acceptWaveform',
-    'listener?.onPartial',
-    'rec.isEndpoint',
-    'rec.reset',
-    'modified_beam_search',
+    'OfflineRecognizer',
+    'OfflineSenseVoiceModelConfig',
+    'SileroVadModelConfig',
+    'minSilenceDuration = 2.0f',
+    'maxSpeechDuration = 30.0f',
+    'listener?.onFinal(text)',
+    'detector.flush()',
 ]:
-    if marker not in zip_text:
-        errors.append(f'ASR regression: streaming Zipformer engine missing marker: {marker}')
-if 'LocalZipformerAsrEngine' not in service_text:
-    errors.append('ASR regression: ClassroomService is not wired to streaming Zipformer engine')
-if 'buildAsrHotwords()' not in service_text:
-    errors.append('ASR regression: ClassroomService PDF/manual hotword provider missing')
+    if marker not in voice_text:
+        errors.append(f'ASR regression: SenseVoice VAD engine missing marker: {marker}')
+if 'LocalSenseVoiceAsrEngine' not in service_text:
+    errors.append('ASR regression: ClassroomService is not wired to SenseVoice engine')
 if (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalQwen3AsrEngine.kt').exists():
     errors.append('ASR regression: old LocalQwen3AsrEngine must stay removed')
 if (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalParaformerStreamingEngine.kt').exists():
@@ -219,4 +217,4 @@ print(f'XML files: {len(xml_files)}')
 print(f'Kotlin files: {len(list(ROOT.glob("app/src/main/java/**/*.kt")))}')
 print(f'R.id defined/referenced: {len(ids)}/{len(refs)}')
 print('Policy scan: no Flutter/WebView/WAKE_LOCK/WorkManager markers')
-print('ASR scan: Android 14+ UIDT + legacy FGS downloader + streaming Zipformer Transducer INT8 + endpoint + hotwords present')
+print('ASR scan: Android 14+ UIDT + legacy FGS downloader + SenseVoice INT8 + long-utterance VAD present')

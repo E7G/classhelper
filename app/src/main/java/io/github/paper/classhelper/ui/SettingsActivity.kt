@@ -64,6 +64,7 @@ class SettingsActivity : AppCompatActivity() {
         ocrModelDelete = findViewById(R.id.ocrModelDeleteButton)
 
         hot.setText(s.hotwords)
+        hot.isEnabled = false
         base.setText(s.llmBaseUrl)
         key.setText(s.llmApiKey)
         model.setText(s.llmModel)
@@ -217,7 +218,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             is AsrModelManager.State.Ready -> {
                 val mb = state.totalBytes / 1024.0 / 1024.0
-                modelStatus.text = String.format(Locale.getDefault(), "已就绪 · %.1f MB · Zipformer 流式中文识别，可直接开始听课", mb)
+                modelStatus.text = String.format(Locale.getDefault(), "已就绪 · %.1f MB · SenseVoice 本地高准确率中文识别", mb)
                 modelProgress.visibility = View.GONE
                 modelProgress.isIndeterminate = false
                 modelAction.text = "已安装"

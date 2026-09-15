@@ -117,7 +117,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="5dp"
-                        android:text="Zipformer Streaming INT8 · 中文实时识别"
+                        android:text="SenseVoiceSmall INT8 · 中文高准确率识别"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:alpha="0.82"
                         android:textSize="13sp" />
@@ -174,7 +174,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:lineSpacingExtra="2dp"
-                        android:text="约 165 MB。下载完成后全部在设备本地流式识别，课堂音频不需要上传到 ASR 服务。面向中文课堂，支持实时 partial、endpoint 与热词偏置。"
+                        android:text="约 230 MB。模型下载后在本地识别，课堂音频不上传。VAD 按长句切分，约 2 秒停顿后提交结果；不显示实时 partial。"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:alpha="0.72"
                         android:textSize="11sp" />
@@ -183,7 +183,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="18dp"
-                        android:text="课程术语 / 专业词（Zipformer 支持热词偏置）"
+                        android:text="课程术语 / 专业词（SenseVoice 暂不使用热词偏置）"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:textSize="12sp"
                         android:textStyle="bold" />

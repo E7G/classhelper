@@ -13,7 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import io.github.paper.classhelper.ClassHelperApp
 import io.github.paper.classhelper.R
-import io.github.paper.classhelper.asr.LocalZipformerAsrEngine
+import io.github.paper.classhelper.asr.LocalSenseVoiceAsrEngine
 import io.github.paper.classhelper.asr.StreamingAsrEngine
 import io.github.paper.classhelper.audio.AudioCapture
 import io.github.paper.classhelper.ui.ReaderActivity
@@ -37,9 +37,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * Foreground classroom recorder with strict ASR isolation.
  *
- * Zipformer owns its decoder thread. All database/question/note/PDF work stays on independent
- * consumer lanes. The watchdog only repairs AudioRecord; it never destroys a live Zipformer stream
- * because doing so would clear buffered classroom audio and cause omissions.
+ * SenseVoice runs on its own VAD/audio/decode workers. Database/question/note/PDF work stays on
+ * independent consumer lanes. The watchdog only repairs AudioRecord; it never resets ASR workers
+ * mid-class, which could discard queued classroom audio.
  */
 class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private val rootJob = SupervisorJob()
@@ -103,8 +103,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         return START_STICKY
     }
 
-    private fun newAsrEngine(): StreamingAsrEngine =
-        LocalZipformerAsrEngine(app.graph.asrModels) { buildAsrHotwords() }
+    private fun newAsrEngine(): StreamingAsrEngine = LocalSenseVoiceAsrEngine(app.graph.asrModels)
 
     private fun startListening() {
         started = true
@@ -123,7 +122,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
             it.copy(
                 listening = true,
                 stopping = false,
-                status = "正在启动 Zipformer 实时中文识别…",
+                status = "正在启动 SenseVoice 本地中文识别…",
                 sessionId = sessionId,
             )
         }
@@ -160,9 +159,8 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     }
 
     /**
-     * Only AudioRecord is auto-rebuilt. Decoder health remains observable through LocalZipformer
-     * status/backlog reporting, but we deliberately never stop/recreate it mid-class because stop()
-     * clears its lossless PCM ring and can discard seconds of queued speech.
+     * Only AudioRecord is auto-rebuilt. ASR workers remain observable through engine status, but are
+     * never restarted mid-class because doing so can discard queued speech/VAD segments.
      */
     private fun startWatchdog() {
         watchdogJob?.cancel()
@@ -224,8 +222,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         uiScope.launch { ClassroomBus.update { it.copy(partial = "") } }
 
         // Thinking-pause gate: a question is only worth processing if the teacher actually leaves
-        // time to think. Zipformer's endpoint already includes ~0.75 s trailing silence; we require
-        // another quiet window here. Any new partial/final increments speechRevision and cancels it.
+        // time to think. Any new ASR final increments speechRevision and cancels this window.
         if (detector.mayBeQuestion(clean)) {
             questionPauseJob = eventScope.launch {
                 delay(QUESTION_THINK_PAUSE_MS)
@@ -270,54 +267,9 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         val snapshot = message
         uiScope.launch { ClassroomBus.update { it.copy(status = snapshot) } }
         ioScope.launch { updateNotification(snapshot) }
-        // Do not destroy/recreate Zipformer automatically here. Keeping queued PCM is more important
-        // than hiding a transient native error, and most recognizer exceptions are recoverable on the
-        // next audio feed. A fresh classroom start remains the safe hard-reset boundary.
-    }
-
-    /**
-     * Restore the high-quality contextual-bias profile used before the stability regressions.
-     * User terms stay first, then the current PDF contributes its title, nearby headings, quoted
-     * terminology and compact uppercase technical tokens. The bound keeps beam search predictable.
-     */
-    private fun buildAsrHotwords(): String {
-        val terms = LinkedHashSet<String>()
-
-        fun add(raw: String) {
-            raw.split(HOTWORD_SPLIT).forEach { part ->
-                val clean = part
-                    .trim()
-                    .removeSuffix(".pdf")
-                    .removeSuffix(".PDF")
-                    .replace('/', ' ')
-                    .replace(Regex("\\s+"), " ")
-                    .trim()
-                if (clean.length !in 2..24) return@forEach
-                if (clean.matches(Regex("(?i)^P?\\d{1,4}$"))) return@forEach
-                if (clean.all { it.isDigit() }) return@forEach
-                terms += clean
-            }
-        }
-
-        add(app.graph.settings.hotwords)
-        add(app.graph.settings.chaoxingCourseName)
-
-        val docId = app.graph.settings.currentDocumentId
-        if (docId != null) {
-            app.graph.db.getDocument(docId)?.title?.let(::add)
-            val chunks = runCatching {
-                app.graph.db.chunksNearPage(docId, app.graph.settings.currentPage, radius = 4)
-            }.getOrDefault(emptyList())
-
-            chunks.forEach { chunk ->
-                add(chunk.title)
-                val text = chunk.text.take(12_000)
-                QUOTED_TERM.findAll(text).forEach { match -> add(match.groupValues[1]) }
-                TECH_TERM.findAll(text).forEach { match -> add(match.value) }
-            }
-        }
-
-        return terms.asSequence().take(MAX_HOTWORDS).joinToString("/")
+        // Do not destroy/recreate ASR workers automatically here. Keeping queued PCM/VAD segments is
+        // more important than hiding a transient native error; a fresh classroom start is the safe
+        // hard-reset boundary.
     }
 
     private fun gracefulStop() {
@@ -405,7 +357,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private fun createChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "后台听课", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "保持麦克风流式识别"
+                description = "保持麦克风采集并进行本地 VAD 识别"
                 setSound(null, null)
             },
         )
@@ -458,16 +410,12 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         const val ACTION_STOP = "io.github.paper.classhelper.STOP_CLASS"
         private const val CHANNEL_ID = "classhelper_listening"
         private const val NOTIFICATION_ID = 101
-        private const val MAX_HOTWORDS = 48
         private const val AUDIO_RESTART_DELAY_MS = 700L
         private const val WATCHDOG_INTERVAL_MS = 2_500L
         private const val AUDIO_STALL_MS = 7_000L
         private const val QUESTION_THINK_PAUSE_MS = 1_200L
         private const val ASR_FINISH_TIMEOUT_MS = 6_000L
         private const val FINAL_NOTE_TIMEOUT_MS = 12_000L
-        private val HOTWORD_SPLIT = Regex("[\\r\\n,，;；/]+")
-        private val QUOTED_TERM = Regex("[《“「『【]([^》”」』】\\n]{2,24})[》”」』】]")
-        private val TECH_TERM = Regex("\\b[A-Z][A-Z0-9+.#_-]{1,15}\\b")
         private const val TAG = "ClassroomService"
     }
 }

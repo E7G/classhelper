@@ -63,7 +63,7 @@ class LocalSenseVoiceAsrEngine(
             try {
                 val senseVoice = OfflineSenseVoiceModelConfig(
                     model = File(dir, "model.int8.onnx").absolutePath,
-                    language = "auto",
+                    language = "zh",
                     useInverseTextNormalization = true
                 )
                 val recognizerConfig = OfflineRecognizerConfig(
@@ -82,10 +82,12 @@ class LocalSenseVoiceAsrEngine(
                     sileroVadModelConfig = SileroVadModelConfig(
                         model = File(dir, "silero_vad.onnx").absolutePath,
                         threshold = 0.48f,
-                        minSilenceDuration = 0.45f,
+                        // Course speech has many within-sentence pauses. A longer VAD hangover
+                        // gives SenseVoice enough context and avoids fragmenting every clause.
+                        minSilenceDuration = 2.0f,
                         minSpeechDuration = 0.20f,
                         windowSize = VAD_WINDOW_SIZE,
-                        maxSpeechDuration = 20.0f
+                        maxSpeechDuration = 30.0f
                     ),
                     sampleRate = SAMPLE_RATE,
                     numThreads = 1,
@@ -97,7 +99,7 @@ class LocalSenseVoiceAsrEngine(
                 recognizer = createdRecognizer
                 vad = createdVad
                 ready = true
-                listener.onState("SenseVoiceSmall 已就绪 · 本地识别")
+                listener.onState("SenseVoiceSmall 已就绪 · 本地高准确率识别")
                 audioWorker.execute { drainBeforeReady() }
             } catch (t: Throwable) {
                 running.set(false)

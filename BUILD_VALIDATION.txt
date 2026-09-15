@@ -10,4 +10,5 @@ PASS: eraser/clear-page no longer recycle/reload PDFView during editing
 PASS: completion removes ink touch surface immediately
 PASS: post-save raster refresh waits for reader idle and restores latest zoom/pan
 
-Gradle compile attempt: BLOCKED before dependency/build evaluation because Gradle wrapper cannot resolve services.gradle.org to download Gradle 8.11.1 (UnknownHostException).
+PASS: :app:assembleDebug
+PASS: :app:testDebugUnitTest

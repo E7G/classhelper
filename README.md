@@ -1,12 +1,12 @@
-# ClassHelper Native 1.12.6
+# ClassHelper Native 1.12.7
 
-> Android 原生课堂听课助手：PDF 阅读/批注 + 本地流式 ASR + 课堂问题检测 + 可选 LLM 抢答/笔记 + 学习通/课堂派课程资料接入。
+> Android 原生课堂听课助手：PDF 阅读/批注 + 本地课堂 ASR + 课堂问题检测 + 可选 LLM 抢答/笔记 + 学习通/课堂派课程资料接入。
 
 ClassHelper Native 是一个 **PDF-first** 的 Android 课堂助手。核心目标是让“看课件、听老师、留课堂记录、发现提问、查资料”保持在同一个工作流里。
 
-当前代码已经不再以 SenseVoice + Silero VAD 作为主课堂识别链路。主 ASR 为 **sherpa-onnx 1.13.5 + Streaming Zipformer Transducer INT8（2025-06-30 中文模型）**，支持真正的流式 partial、endpoint、课程热词和本地离线推理。
+主 ASR 为 **sherpa-onnx 1.13.5 + SenseVoiceSmall INT8 + Silero VAD**。长语音先由 VAD 保留上下文、按完整语句切分，再交给离线 SenseVoice 解码，优先提升课堂连续讲解的识别质量。
 
-当前版本：`1.12.6-asr-stability`
+当前版本：`1.12.7-asr-accuracy`
 
 ## 当前技术基线
 
@@ -15,51 +15,45 @@ ClassHelper Native 是一个 **PDF-first** 的 Android 课堂助手。核心目�
 - JDK 17
 - arm64-v8a
 - sherpa-onnx `1.13.5`
-- Streaming Zipformer INT8 中文 ASR
+- SenseVoiceSmall INT8 + Silero VAD 中文 ASR
 - AhmerPdfViewer + PDFBox-Android
 - ML Kit 中文 OCR + 可选 PP-OCRv6/ONNX Runtime 高精度 OCR
 - OpenAI-compatible `/chat/completions` LLM 接口（可选）
 
-## 1. 本地流式课堂 ASR
+## 1. 本地课堂 ASR
 
-默认模型：`sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`
+默认模型：`sensevoice-small-int8-2024-07-17`
 
 模型文件：
 
-- `encoder.int8.onnx`：约 161 MB
-- `decoder.onnx`：约 5.2 MB
-- `joiner.int8.onnx`：约 1.0 MB
-- `tokens.txt`：约 20 KB
+- `model.int8.onnx`：约 228 MiB
+- `tokens.txt`：约 309 KiB
+- `silero_vad.onnx`：约 629 KiB
 
-总下载量约 **167 MB**。应用在开始听课时检测模型；未安装时可直接启动系统管理的后台下载。模型准备完成后，课堂语音识别在手机本地运行，不依赖 ASR 服务器。
+总下载量约 **229 MiB**。应用在开始听课时检测模型；未安装时可直接启动系统管理的后台下载。模型准备完成后，课堂语音识别在手机本地运行，不依赖 ASR 服务器。建议至少保留 **340 MiB** 可用空间。
 
 当前识别链路：
 
 ```text
 AudioRecord 16 kHz PCM16
         ↓
-LocalZipformerAsrEngine
+Silero VAD (512-sample windows)
         ↓
-sherpa-onnx OnlineRecognizer / Zipformer2
+completed speech segment
         ↓
-modified_beam_search · 4 active paths
+SenseVoiceSmall INT8 / greedy offline decode
         ↓
-实时 partial
-        ↓
-endpoint → final → reset stream
-        ↓
-课堂记录 / 问题检测 / PDF 匹配 / 自动笔记
+stable final → 课堂记录 / 问题检测 / PDF 匹配 / 自动笔记
 ```
 
-当前 endpoint 参数偏向课堂连续语音完整度：
+准确率优先的 VAD 参数：
 
-- 无有效语音：约 `3.0 s`
-- 已有语音后的尾静音：约 `1.60 s`
-- 单段最长：`30 s`
-- endpoint 一旦成立就重置 sherpa stream，避免 endpointed stream 被继续复用后出现下一句话粘连、停止出 final 等问题。
-- endpoint 的 final 如果瞬时为空，会回退到该段最后一次有效 partial；重置后不会把旧 partial 泄漏到下一段。
+- 语言提示：`zh`；启用逆文本规范化（ITN）
+- VAD 阈值：`0.48`；最短静音：`2.0 s`；最短语音：`0.2 s`
+- 单段最长：`30 s`；较长上下文能减少老师句中停顿导致的碎片化
+- 音频持续采集；每个完整 VAD 语段异步解码一次，再只将稳定 final 送入课堂后续流水线
 
-课程热词会通过 Zipformer hotwords 注入，用于课程名、专业词和 PDF 相关关键词偏置。
+此链路不产生实时 partial，也不使用课程热词偏置；设置页会明确说明该取舍。
 
 详见 [`docs/LOCAL_ASR.md`](docs/LOCAL_ASR.md)。
 
@@ -71,7 +65,7 @@ endpoint → final → reset stream
 - 备用：HF Mirror
 - Android 14+：User-Initiated Data Transfer `JobService`
 - Android 13 及以下：`dataSync` 前台服务
-- 推荐至少保留约 **260 MB** 可用空间
+- 推荐至少保留约 **340 MiB** 可用空间
 
 下载目录优先使用应用专属外部 Downloads 下的 `asr_models`；不可用时回退到内部应用目录。删除模型不会影响 PDF、课堂记录或资料库数据。
 
@@ -118,7 +112,7 @@ PDF 优先读取文本层；扫描页再进入 OCR。
 - 自动笔记
 - PDF 页匹配
 
-watchdog 只在 `AudioRecord` 异常时重建录音端，不会在课堂中途为了“恢复”而销毁仍存活的 Zipformer stream，避免丢失已经缓冲的课堂音频。
+watchdog 只在 `AudioRecord` 异常时重建录音端，不会在课堂中途为了“恢复”而销毁仍存活的 VAD/解码链路，避免丢失已经缓冲的课堂音频。
 
 每堂课保存独立 session；稳定 final transcript 持久化到数据库。停止听课时会先停止录音，再要求 ASR flush 最后一段。
 
@@ -228,7 +222,7 @@ GitHub Actions 会执行源码回归检查、单元测试、Lint、Debug/Release
 
 ```text
 app/src/main/java/io/github/paper/classhelper/
-├── asr/        # Zipformer、本地模型管理、流式 transcript 状态
+├── asr/        # SenseVoice、Silero VAD、本地模型管理
 ├── audio/      # AudioRecord
 ├── classroom/  # 前台听课服务、问题/笔记流水线
 ├── chaoxing/   # 学习通课程/资料读取

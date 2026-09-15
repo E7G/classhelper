@@ -5,7 +5,7 @@ ClassHelper 是一个 PDF-first 的 Android 原生课堂助手。阅读、课堂
 ## Modules
 
 - `audio/` — Android `AudioRecord`，16 kHz mono PCM16 低分配采集。
-- `asr/` — Streaming Zipformer 模型下载、sherpa-onnx `OnlineRecognizer`、partial/final 状态管理与课程热词。
+- `asr/` — SenseVoiceSmall + Silero VAD 本地识别、模型下载和模型生命周期管理。
 - `classroom/` — microphone foreground service、session/transcript 持久化、问题检测、回答和自动笔记流水线。
 - `chaoxing/` — 学习通课程与资料读取/预览兼容层，保持只读。
 - `ketangpai/` — 课堂派课程与资源浏览、增量同步与权限边界处理。
@@ -22,13 +22,13 @@ ClassHelper 是一个 PDF-first 的 Android 原生课堂助手。阅读、课堂
 ```text
 AudioRecord
    ↓
-LocalZipformerAsrEngine
+LocalSenseVoiceAsrEngine
    ↓
-sherpa-onnx OnlineRecognizer
+sherpa-onnx Silero VAD → complete utterance
    ↓
-partial ───────────────→ UI live subtitle
-   ↓ endpoint
-final + stream reset
+SenseVoiceSmall offline decode
+   ↓
+stable final
    ↓
 ClassroomService
    ├─→ transcript DB
@@ -37,9 +37,9 @@ ClassroomService
    └─→ AutoNotePipeline
 ```
 
-当前主模型为 `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`。模型安装后 ASR 完全本地运行。
+当前主模型为 `sensevoice-small-int8-2024-07-17` + `silero_vad.onnx`。音频持续采集，VAD 每次输出完整语段后才触发离线解码；识别文本以 final 形式进入课堂业务模块。模型安装后 ASR 完全本地运行。
 
-`ClassroomService` 的 watchdog 只修复 `AudioRecord`；不会为了普通健康检查销毁仍在工作的 Zipformer engine，以免清掉已缓冲的课堂音频。
+课堂参数优先保留上下文：VAD 最短静音 `2.0 s`、最长语段 `30 s`。因此 final 延迟高于流式模型，当前也不产生实时 partial 或课程热词偏置。`ClassroomService` 的 watchdog 只修复 `AudioRecord`，不会为普通健康检查销毁仍在工作的识别链路。
 
 ## Question / answer path
 
@@ -59,7 +59,7 @@ optional OpenAI-compatible LLM
 answer preview/history
 ```
 
-partial 只用于实时显示和判断“老师仍在说话”，不会直接触发 LLM。
+本链路只发布稳定 final；尚未完成的 VAD 语段不会进入 LLM 问答。问句识别继续经过安静思考窗口后再触发回答。
 
 ## Knowledge path
 
@@ -94,7 +94,7 @@ recent transcript┘
 
 `tools/validate_source.py` 在 CI 中检查关键架构约束，包括：
 
-- Streaming Zipformer 文件、endpoint/reset、modified beam search、hotwords wiring；
+- SenseVoice/VAD 文件、长语段配置与 ASR 服务 wiring；
 - Android 14+ UIDT + 旧系统 FGS 下载路径；
 - PDF 批注标准保存路径；
 - Reader UI 的关键兼容性标记；

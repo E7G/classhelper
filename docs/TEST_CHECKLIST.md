@@ -5,7 +5,7 @@
 - Delete the ASR model from Settings.
 - Tap “开始听课” in Reader.
 - Confirm the first-run flow offers model download.
-- Confirm the model shown is Streaming Zipformer INT8, not SenseVoice.
+- Confirm the model shown is SenseVoiceSmall INT8 + Silero VAD.
 - Confirm progress is visible and an interrupted download can resume from `.part`.
 - Confirm the Hugging Face source can fall back to HF Mirror when needed.
 - Android 14+：confirm download is scheduled through the user-initiated transfer job.
@@ -14,22 +14,21 @@
 - Disable network after the model is ready and confirm transcription still works.
 - Confirm Settings has no ASR URL / host / port fields.
 
-## Streaming ASR quality / lifecycle
+## VAD-segmented ASR quality / lifecycle
 
-- Speak continuous Chinese with short natural pauses and confirm partial text updates continuously.
-- Pause for about 1.6 s after speech and confirm one stable final is emitted.
-- Speak a very short utterance such as “好” or “对” and confirm it can finalize instead of poisoning the next segment.
-- Immediately speak a second sentence after the first endpoint and confirm text from the previous partial does not leak into it.
-- Confirm later sentences continue producing partial/final results after multiple endpoints; no merged/stalled endpointed stream.
-- Confirm duplicate partial text is not repeatedly published.
-- Test course/PDF hotwords and confirm recognition still initializes normally with and without hotwords.
+- Speak continuous Chinese with natural pauses; confirm VAD submits complete utterances to the decode worker and stable final text appears after about 2 s trailing silence.
+- Speak a short utterance and then another sentence; confirm segments are neither dropped nor mixed.
+- Confirm pauses shorter than the VAD hangover do not fragment sentence context excessively.
+- Confirm a lecture sentence longer than 30 s is split into bounded segments and recognition keeps running.
+- Stop class during speech and confirm the final VAD window and queued segments are flushed before session completion.
+- Confirm the UI does not promise real-time partial subtitles or active course hotword bias for SenseVoice.
+- Test initialization/download errors and confirm a bounded pre-init buffer preserves initial audio without growing indefinitely.
 - Background/lock screen during an active class and confirm the microphone foreground service continues.
 - Force/reproduce an `AudioRecord` interruption and confirm only audio capture is rebuilt; the classroom session is not silently discarded.
-- Stop class during speech and confirm the last segment is flushed to final transcript when possible.
 
 ## Question pipeline
 
-- Confirm live partial alone never directly triggers an LLM request.
+- Confirm only stable final text can enter question handling; incomplete speech never directly triggers an LLM request.
 - Speak a question and continue talking immediately; pending question handling should be cancelled by new speech.
 - Speak a question and leave the configured thinking pause; confirm it enters the answer pipeline.
 - Leave LLM settings empty and confirm local ASR/PDF/records remain usable.

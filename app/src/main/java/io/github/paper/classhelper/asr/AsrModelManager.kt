@@ -22,11 +22,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
- * App-owned streaming Zipformer Transducer INT8 model manager.
+ * App-owned SenseVoiceSmall INT8 + Silero VAD model manager.
  *
- * The model is split into encoder/decoder/joiner/token files so Android can download and resume each
- * object directly without unpacking a large archive. Android 14+ uses a user-initiated transfer job;
- * older releases use the existing sequential foreground-service downloader.
+ * Android 14+ uses a user-initiated transfer job; older releases use the existing sequential
+ * foreground-service downloader. The file list is ordered so the large acoustic model downloads
+ * before the two small support files.
  */
 class AsrModelManager(context: Context) {
     data class Source(val name: String, val url: String)
@@ -84,48 +84,47 @@ class AsrModelManager(context: Context) {
         .retryOnConnectionFailure(true)
         .build()
 
-    private val zipformerHfBase =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/resolve/main"
-    private val zipformerMirrorBase =
-        "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/resolve/main"
+    private val senseVoiceHfBase =
+        "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main"
+    private val senseVoiceMirrorBase =
+        "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main"
 
-    private fun zipformerSources(fileName: String): List<Source> = listOf(
-        Source("Hugging Face", "$zipformerHfBase/$fileName?download=true"),
-        Source("HF Mirror", "$zipformerMirrorBase/$fileName"),
+    private fun senseVoiceSources(fileName: String): List<Source> = listOf(
+        Source("Hugging Face", "$senseVoiceHfBase/$fileName?download=true"),
+        Source("HF Mirror", "$senseVoiceMirrorBase/$fileName"),
     )
 
     val model = ModelSpec(
-        id = "streaming-zipformer-zh-int8-2025-06-30",
-        displayName = "Zipformer Streaming INT8 · 中文",
-        description = "真正流式中文识别 · 实时 partial · endpoint · 支持热词偏置",
+        id = "sensevoice-small-int8-2024-07-17",
+        displayName = "SenseVoiceSmall INT8 · 中文高准确率",
+        description = "本地 VAD 分句识别 · 课程长句优化 · ITN/标点",
         files = listOf(
             ModelFileSpec(
-                fileName = "encoder.int8.onnx",
-                displayName = "Zipformer Encoder INT8",
-                approximateBytes = 161_000_000L,
-                minimumBytes = 150_000_000L,
-                sources = zipformerSources("encoder.int8.onnx"),
-            ),
-            ModelFileSpec(
-                fileName = "decoder.onnx",
-                displayName = "Zipformer Decoder",
-                approximateBytes = 5_170_000L,
-                minimumBytes = 4_500_000L,
-                sources = zipformerSources("decoder.onnx"),
-            ),
-            ModelFileSpec(
-                fileName = "joiner.int8.onnx",
-                displayName = "Zipformer Joiner INT8",
-                approximateBytes = 1_030_000L,
-                minimumBytes = 900_000L,
-                sources = zipformerSources("joiner.int8.onnx"),
+                fileName = "model.int8.onnx",
+                displayName = "SenseVoiceSmall INT8",
+                approximateBytes = 239_233_841L,
+                minimumBytes = 220_000_000L,
+                sources = senseVoiceSources("model.int8.onnx"),
+                expectedBytes = 239_233_841L,
             ),
             ModelFileSpec(
                 fileName = "tokens.txt",
-                displayName = "Zipformer 中文词表",
-                approximateBytes = 20_600L,
-                minimumBytes = 15_000L,
-                sources = zipformerSources("tokens.txt"),
+                displayName = "SenseVoice 词表",
+                approximateBytes = 315_894L,
+                minimumBytes = 250_000L,
+                sources = senseVoiceSources("tokens.txt"),
+                expectedBytes = 315_894L,
+                expectedSha256 = "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+            ),
+            ModelFileSpec(
+                fileName = "silero_vad.onnx",
+                displayName = "Silero VAD",
+                approximateBytes = 644_000L,
+                minimumBytes = 500_000L,
+                sources = listOf(
+                    Source("sherpa-onnx 官方 VAD", "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"),
+                    Source("ModelScope VAD", "https://modelscope.cn/models/xnnehang/k2-fsa-silero-vad/resolve/master/silero_vad.onnx"),
+                ),
             ),
         ),
     )
@@ -134,7 +133,7 @@ class AsrModelManager(context: Context) {
     private val externalRootDir = externalDownloads?.let { File(it, "asr_models") }
     private val fallbackRootDir = File(appContext.filesDir, "asr_models")
     private val modelDir = File(externalRootDir ?: fallbackRootDir, model.id)
-    private val verificationMarker get() = File(modelDir, ".verified-v9-streaming-zipformer")
+    private val verificationMarker get() = File(modelDir, ".verified-v10-sensevoice-vad-long-utterance")
 
     init {
         modelDir.mkdirs()
@@ -174,16 +173,16 @@ class AsrModelManager(context: Context) {
     fun download() {
         readyState()?.let { emit(it); return }
         val usable = (externalRootDir ?: fallbackRootDir).usableSpace
-        val required = 260L * 1024L * 1024L
+        val required = 340L * 1024L * 1024L
         if (usable in 1 until required) {
             emit(
                 State.Error(
-                    "存储空间不足：流式模型约 165 MB，建议至少保留 260 MB；当前可用约 ${usable / 1024 / 1024} MB",
+                    "存储空间不足：语音模型约 230 MB，建议至少保留 340 MB；当前可用约 ${usable / 1024 / 1024} MB",
                 ),
             )
             return
         }
-        emit(State.Preparing(if (hasPartialFiles()) "正在从断点继续流式模型下载…" else "正在启动流式模型后台下载…"))
+        emit(State.Preparing(if (hasPartialFiles()) "正在从断点继续语音模型下载…" else "正在启动语音模型后台下载…"))
         if (android.os.Build.VERSION.SDK_INT >= 34) {
             val result = runCatching { AsrModelDownloadJobService.schedule(appContext, model.approximateBytes) }
             result.onFailure { emit(State.Error("无法启动系统后台下载任务：${it.message ?: it.javaClass.simpleName}")) }
@@ -445,8 +444,8 @@ class AsrModelManager(context: Context) {
             add(File(appContext.filesDir, "asr_models"))
         }.distinctBy { it.absolutePath }
         val legacyIds = listOf(
-            "sensevoice-small-int8-2024-07-17",
             "streaming-paraformer-bilingual-zh-en-int8",
+            "streaming-zipformer-zh-int8-2025-06-30",
             "qwen3-asr-0.6b-int8-2026-03-25",
         )
         roots.forEach { root ->

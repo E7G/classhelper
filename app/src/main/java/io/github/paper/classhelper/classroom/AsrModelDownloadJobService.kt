@@ -20,11 +20,11 @@ import io.github.paper.classhelper.ui.ReaderActivity
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Android 14+ user-initiated data-transfer job for the streaming Zipformer ASR model. */
+/** Android 14+ user-initiated data-transfer job for the SenseVoice ASR model. */
 @RequiresApi(34)
 class AsrModelDownloadJobService : JobService() {
     private val worker = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "ClassHelper-Zipformer-UIDT").apply { priority = Thread.NORM_PRIORITY - 1 }
+        Thread(r, "ClassHelper-SenseVoice-UIDT").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
     private val stopped = AtomicBoolean(false)
     private lateinit var app: ClassHelperApp
@@ -40,7 +40,7 @@ class AsrModelDownloadJobService : JobService() {
         this.params = params
         stopped.set(false)
         return try {
-            setJobNotification(params, "准备下载 Zipformer 流式模型…", 0, true)
+            setJobNotification(params, "准备下载 SenseVoice 高准确率模型…", 0, true)
             worker.execute {
                 try {
                     val result = app.graph.asrModels.performDownload { state ->
@@ -48,7 +48,7 @@ class AsrModelDownloadJobService : JobService() {
                     }
                     if (!stopped.get()) {
                         when (result) {
-                            is AsrModelManager.State.Ready -> setJobNotification(params, "流式模型已就绪", 100, false)
+                            is AsrModelManager.State.Ready -> setJobNotification(params, "SenseVoice 模型已就绪", 100, false)
                             is AsrModelManager.State.Error -> setJobNotification(params, "下载暂停/失败：${result.message}", 0, false)
                             else -> Unit
                         }
@@ -92,7 +92,7 @@ class AsrModelDownloadJobService : JobService() {
                 state.overallPercent,
                 false,
             )
-            is AsrModelManager.State.Ready -> setJobNotification(params, "流式模型已就绪", 100, false)
+            is AsrModelManager.State.Ready -> setJobNotification(params, "SenseVoice 模型已就绪", 100, false)
             is AsrModelManager.State.Error -> setJobNotification(params, "下载失败：${state.message}", 0, false)
             AsrModelManager.State.Missing -> Unit
         }
@@ -107,7 +107,7 @@ class AsrModelDownloadJobService : JobService() {
         )
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_class)
-            .setContentTitle("课堂助手 · Zipformer Streaming")
+            .setContentTitle("课堂助手 · SenseVoice 本地识别")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOnlyAlertOnce(true)
@@ -127,7 +127,7 @@ class AsrModelDownloadJobService : JobService() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "语音模型下载", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Zipformer Streaming INT8 本地语音模型后台下载"
+                description = "SenseVoiceSmall INT8 本地中文语音模型后台下载"
                 setSound(null, null)
             },
         )

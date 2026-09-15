@@ -17,11 +17,11 @@ import io.github.paper.classhelper.ui.ReaderActivity
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** One-at-a-time, resumable streaming Zipformer model downloader for Android 13 and below. */
+/** One-at-a-time, resumable SenseVoice model downloader for Android 13 and below. */
 class AsrModelDownloadService : Service() {
     private lateinit var app: ClassHelperApp
     private val worker = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "ClassHelper-Zipformer-Download").apply { priority = Thread.NORM_PRIORITY - 1 }
+        Thread(r, "ClassHelper-SenseVoice-Download").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
     private val started = AtomicBoolean(false)
 
@@ -38,13 +38,13 @@ class AsrModelDownloadService : Service() {
             return START_NOT_STICKY
         }
 
-        showForeground("准备下载 Zipformer 流式模型…", 0, true, ongoing = true)
+            showForeground("准备下载 SenseVoice 高准确率模型…", 0, true, ongoing = true)
 
         if (started.compareAndSet(false, true)) {
             worker.execute {
                 val result = app.graph.asrModels.performDownload(::updateNotification)
                 when (result) {
-                    is AsrModelManager.State.Ready -> showForeground("流式模型已就绪", 100, false, ongoing = false)
+                    is AsrModelManager.State.Ready -> showForeground("SenseVoice 模型已就绪", 100, false, ongoing = false)
                     is AsrModelManager.State.Error -> showForeground(result.message, 0, false, ongoing = false)
                     else -> Unit
                 }
@@ -76,7 +76,7 @@ class AsrModelDownloadService : Service() {
                 false,
                 ongoing = true,
             )
-            is AsrModelManager.State.Ready -> showForeground("流式模型已就绪", 100, false, ongoing = false)
+            is AsrModelManager.State.Ready -> showForeground("SenseVoice 模型已就绪", 100, false, ongoing = false)
             is AsrModelManager.State.Error -> showForeground("下载失败：${state.message}", 0, false, ongoing = false)
             AsrModelManager.State.Missing -> Unit
         }
@@ -86,7 +86,7 @@ class AsrModelDownloadService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "语音模型下载", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Zipformer Streaming INT8 本地语音模型后台下载"
+                description = "SenseVoiceSmall INT8 本地中文语音模型后台下载"
                 setSound(null, null)
             },
         )
@@ -107,7 +107,7 @@ class AsrModelDownloadService : Service() {
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_class)
-            .setContentTitle("课堂助手 · Zipformer Streaming")
+            .setContentTitle("课堂助手 · SenseVoice 本地识别")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOnlyAlertOnce(true)
