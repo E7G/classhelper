@@ -1,9 +1,11 @@
-- 修复学习通课程资料页“明明有文件却检测不到 / 无法预览”的问题。
-- 资料解析不再只认固定的 `property.objectid`，现在兼容 `objectid`、`objectId`、`objectID`、`object_id`、`oid` 等常见字段，并同时检查附件顶层、property、data 和 property.data。
-- 学习通不同部署返回的 `attachments` 可能嵌套在不同层级；现在会递归扫描 mArg JSON 中所有 attachments 数组，避免文件存在但列表为空。
-- 当常规 `num=0..N-1` 卡片页码没有找到任何资料时，会自动尝试一套常见的 `num=1..N` 页码规则；cardcount 缺失时也会额外探测第一页。
-- 兼容更多直达/预览地址字段，包括 downloadUrl、fileUrl、previewUrl、pdf、http、httphd 等，并可从 URL 查询参数中恢复 objectId。
-- 重点修复课堂实时识别“整句话经常只留下两三个字”的严重断句问题：Zipformer 的有声尾静音断句从 0.75 秒放宽到 1.60 秒，无声断句放宽到 3.0 秒，最长单段提高到 30 秒。
-- 新增短片段保护：当底层 endpoint 过早触发，但当前仅有少量有效字符且累计音频仍很短时，不再立刻 reset 识别流，而是继续接收后续语音，避免一句话被切成多个 1～3 字碎片。
-- Zipformer 统一使用 modified beam search（4 active paths），优先提高中文课堂连续识别完整度；音频仍按原有无损内存/磁盘缓冲链路处理。
-- 保持现有只读行为不变：学习通仅课程资料读取和预览，不签到、不刷课、不提交作业、不修改课程数据。
+## ClassHelper 1.12.6-asr-stability
+
+- 修复 Zipformer endpoint 生命周期问题：native endpoint 一旦成立就完成当前段并 `reset` stream，不再继续复用已经 endpointed 的识别流，避免后续句子粘连、长时间不再出 final 等问题。
+- 新增 `StreamingTranscriptState` 管理单段 partial/final：重复 partial 不重复发布；endpoint 的 native final 为空时回退到本段最后有效 partial；提交后立即清空，避免上一段文字泄漏到下一段。
+- 补充 JVM 单元测试，覆盖短句 endpoint、final 覆盖 partial、重复 partial 抑制和跨段不串文本。
+- 保留课堂完整度优先的 Zipformer 参数：有声尾静音约 1.60 秒、无有效语音约 3.0 秒、单段最长 30 秒、modified beam search / 4 active paths。
+- 修复 GitHub Actions Release 阻塞：`android-actions/setup-android` 默认会请求 Google 已移除的旧 SDK `tools` 包，导致新 runner 在 Gradle 启动前直接失败；现在只由 setup action 准备 `platform-tools`，SDK 36 / Build Tools 36.0.0 继续显式安装。
+- 版本提升到 `1.12.6-asr-stability`，避免覆盖已经发布且指向旧提交的 `v1.12.5-chaoxing-asr` 标签。
+- README 按当前代码重写：主 ASR 已明确为 Streaming Zipformer INT8，补充 endpoint/reset、模型下载、后台课堂服务、问题流水线、学习通/课堂派和构建说明。
+- 同步更新 `docs/LOCAL_ASR.md`、`docs/ARCHITECTURE.md`、`docs/TEST_CHECKLIST.md`，移除已经过时的 SenseVoice + Silero VAD 主链路描述。
+- 学习通继续保持只读；课堂派继续遵守资源权限标志，不增加签到、刷课、提交作业或绕过禁止下载限制的行为。
