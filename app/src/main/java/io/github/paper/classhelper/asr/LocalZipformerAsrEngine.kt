@@ -88,9 +88,8 @@ class LocalZipformerAsrEngine(
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
     private var activeModelDir: File? = null
-    private var lastPartial = ""
+    private val transcriptState = StreamingTranscriptState()
     private var speechStatusShown = false
-    private var utteranceAcceptedSamples = 0L
 
     fun health(): Health {
         val now = SystemClock.elapsedRealtime()
@@ -115,7 +114,7 @@ class LocalZipformerAsrEngine(
         lastDecodeActivityMs = now
         decoderBusy = false
         spoolFailureReported = false
-        utteranceAcceptedSamples = 0L
+        transcriptState.reset()
         dispatchState("正在加载 Zipformer 流式中文模型…")
 
         val dir = models.modelDirectory()
@@ -146,10 +145,10 @@ class LocalZipformerAsrEngine(
                 val config = OnlineRecognizerConfig(
                     featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80, dither = 0.0f),
                     modelConfig = modelConfig,
-                    // Classroom speech contains frequent short pauses between phrases. The previous
-                    // 0.75 s endpoint aggressively reset the recognizer and could turn one sentence
-                    // into many 1-3 character finals. Use a conservative endpoint and an additional
-                    // short-fragment guard below so completeness wins over sub-second final latency.
+                    // Classroom speech contains frequent short pauses between phrases. Keep a
+                    // conservative endpoint, but always reset on it: suppressing reset for short
+                    // fragments leaves sherpa's stream in an endpointed state and later sentences
+                    // get merged or stop producing finals.
                     endpointConfig = EndpointConfig(
                         rule1 = EndpointRule(false, 3.0f, 0.0f),
                         rule2 = EndpointRule(true, 1.60f, 0.0f),
@@ -164,9 +163,8 @@ class LocalZipformerAsrEngine(
                 val createdStream = createdRecognizer.createStream(hotwords)
                 recognizer = createdRecognizer
                 stream = createdStream
-                lastPartial = ""
+                transcriptState.reset()
                 speechStatusShown = false
-                utteranceAcceptedSamples = 0L
                 lastBacklogNoticeMs = 0L
                 lastDecodeActivityMs = SystemClock.elapsedRealtime()
                 if (running.get()) {
@@ -492,10 +490,9 @@ class LocalZipformerAsrEngine(
         decoderBusy = true
         return try {
             current.acceptWaveform(samples, SAMPLE_RATE)
-            utteranceAcceptedSamples += samples.size
             decodeReady(rec, current)
             publishResult(rec, current)
-            if (rec.isEndpoint(current) && shouldFinalizeEndpoint()) finalizeEndpoint(rec, current)
+            if (rec.isEndpoint(current)) finalizeEndpoint(rec, current)
             lastDecodeActivityMs = SystemClock.elapsedRealtime()
             true
         } catch (t: Throwable) {
@@ -515,46 +512,21 @@ class LocalZipformerAsrEngine(
 
     private fun publishResult(rec: OnlineRecognizer, current: OnlineStream) {
         val text = rec.getResult(current).text.trim()
-        if (text.isBlank() || text == lastPartial) return
-        lastPartial = text
-        dispatchPartial(text)
+        val changed = transcriptState.updatePartial(text) ?: return
+        dispatchPartial(changed)
         if (!speechStatusShown) {
             speechStatusShown = true
             dispatchState("正在听课 · 连续识别中")
         }
     }
 
-    /**
-     * Native endpoint detection is intentionally not trusted for very short fragments. A short
-     * breathing pause used to produce finals such as “我们” / “然后” and reset all following
-     * context. Keep the same stream alive until either enough text or enough utterance audio has
-     * accumulated. AudioRecord continues feeding silence, so a genuinely short utterance still
-     * finalizes after the guard interval instead of getting stuck forever.
-     */
-    private fun shouldFinalizeEndpoint(): Boolean {
-        val meaningfulChars = lastPartial.count { !it.isWhitespace() && !it.isPunctuationLike() }
-        val audioMs = utteranceAcceptedSamples * 1000L / SAMPLE_RATE
-        return meaningfulChars >= MIN_ENDPOINT_CHARS || audioMs >= MIN_ENDPOINT_AUDIO_MS
-    }
-
-    private fun Char.isPunctuationLike(): Boolean = when (Character.getType(this)) {
-        Character.CONNECTOR_PUNCTUATION.toInt(),
-        Character.DASH_PUNCTUATION.toInt(),
-        Character.START_PUNCTUATION.toInt(),
-        Character.END_PUNCTUATION.toInt(),
-        Character.INITIAL_QUOTE_PUNCTUATION.toInt(),
-        Character.FINAL_QUOTE_PUNCTUATION.toInt(),
-        Character.OTHER_PUNCTUATION.toInt() -> true
-        else -> false
-    }
-
     private fun finalizeEndpoint(rec: OnlineRecognizer, current: OnlineStream) {
-        val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
-        if (finalText.isNotBlank()) dispatchFinal(finalText)
+        val finalText = transcriptState.takeFinal(rec.getResult(current).text)
+        // Reset regardless of whether the model returned text. Endpoint is a stream lifecycle
+        // boundary, not a quality threshold; retaining it can stall every following utterance.
         rec.reset(current)
-        lastPartial = ""
         speechStatusShown = false
-        utteranceAcceptedSamples = 0L
+        finalText?.let(::dispatchFinal)
         dispatchState("Zipformer 已就绪 · 等待讲话")
     }
 
@@ -576,10 +548,8 @@ class LocalZipformerAsrEngine(
                             rec.decode(current)
                             lastDecodeActivityMs = SystemClock.elapsedRealtime()
                         }
-                        val finalText = rec.getResult(current).text.trim().ifBlank { lastPartial }
-                        lastPartial = ""
-                        utteranceAcceptedSamples = 0L
-                        if (finalText.isNotBlank()) {
+                        val finalText = transcriptState.takeFinal(rec.getResult(current).text)
+                        if (finalText != null) {
                             dispatchFinal(finalText, onFinished)
                             return@execute
                         }
@@ -657,9 +627,8 @@ class LocalZipformerAsrEngine(
         stream = null
         runCatching { recognizer?.release() }
         recognizer = null
-        lastPartial = ""
+        transcriptState.reset()
         speechStatusShown = false
-        utteranceAcceptedSamples = 0L
         decoderBusy = false
         activeModelDir = null
     }
@@ -733,7 +702,5 @@ class LocalZipformerAsrEngine(
         private const val BACKLOG_WARN_MS = 1_500
         private const val BACKLOG_NOTICE_INTERVAL_MS = 3_000L
 
-        private const val MIN_ENDPOINT_CHARS = 5
-        private const val MIN_ENDPOINT_AUDIO_MS = 3_200L
     }
 }
