@@ -25,6 +25,12 @@ jobs:
           java-version: '17'
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The legacy SDK package named "tools" was removed from Google's repository.
+          # setup-android used to request it by default, which made clean CI runners fail
+          # before Gradle even started. platform-tools is sufficient here; the exact
+          # platform/build-tools versions are installed explicitly in the next step.
+          packages: platform-tools
 
       - name: Install SDK
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
