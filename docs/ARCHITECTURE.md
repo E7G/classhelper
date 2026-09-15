@@ -39,7 +39,7 @@ ClassroomService
 
 当前主模型为 `sensevoice-small-int8-2024-07-17` + `silero_vad.onnx`。音频持续采集，VAD 每次输出完整语段后才触发离线解码；识别文本以 final 形式进入课堂业务模块。模型安装后 ASR 完全本地运行。
 
-课堂参数优先保留上下文：VAD 最短静音 `2.0 s`、最长语段 `30 s`。因此 final 延迟高于流式模型，当前也不产生实时 partial 或课程热词偏置。`ClassroomService` 的 watchdog 只修复 `AudioRecord`，不会为普通健康检查销毁仍在工作的识别链路。
+课堂参数优先保留上下文：VAD 最短静音 `1.8 s`、最长语段 `30 s`。因此 final 延迟高于流式模型，当前也不产生实时 partial 或课程热词偏置。`ClassroomService` 的 watchdog 只修复 `AudioRecord`，不会为普通健康检查销毁仍在工作的识别链路。
 
 ## Question / answer path
 

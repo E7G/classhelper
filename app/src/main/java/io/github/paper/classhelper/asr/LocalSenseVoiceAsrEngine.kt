@@ -84,7 +84,7 @@ class LocalSenseVoiceAsrEngine(
                         threshold = 0.48f,
                         // Course speech has many within-sentence pauses. A longer VAD hangover
                         // gives SenseVoice enough context and avoids fragmenting every clause.
-                        minSilenceDuration = 2.0f,
+                        minSilenceDuration = 1.8f,
                         minSpeechDuration = 0.20f,
                         windowSize = VAD_WINDOW_SIZE,
                         maxSpeechDuration = 30.0f

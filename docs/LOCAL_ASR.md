@@ -42,7 +42,7 @@ VAD parameters are tuned for lectures, where pauses can occur inside clauses:
 
 - Threshold: `0.48`
 - Minimum speech: `0.20 s`
-- Minimum trailing silence: `2.0 s`
+- Minimum trailing silence: `1.8 s`
 - Maximum segment: `30.0 s`
 - Flush: pad the final partial VAD window, flush detector state, then drain queued segments when stopping
 
@@ -64,4 +64,4 @@ After download, classroom inference is fully local and requires no ASR URL, host
 
 ## Quality benchmark note
 
-The supplied Song Hao lesson video was evaluated against its companion VTT with whitespace and punctuation excluded from character error rate. Best tested settings above scored **94.71% character accuracy** (CER 5.29%), versus **84.91%** for the previous Zipformer app parameters on the same sample. This is a single-video comparison against an unverified subtitle, not a guaranteed production accuracy rate; it did not reach the requested 95% threshold.
+The supplied lesson video was evaluated against its companion VTT with whitespace and punctuation excluded from character error rate. The selected `1.8 s` VAD hangover scored **94.72% character accuracy** (CER 5.28%), versus **84.91%** for the previous Zipformer app parameters on the same sample. It commits about 200 ms sooner than the previous 2.0-second setting. This is a single-video comparison against an unverified subtitle, not a guaranteed production accuracy rate; it did not reach the requested 95% threshold.

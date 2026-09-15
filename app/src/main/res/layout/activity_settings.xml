@@ -174,7 +174,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:lineSpacingExtra="2dp"
-                        android:text="约 230 MB。模型下载后在本地识别，课堂音频不上传。VAD 按长句切分，约 2 秒停顿后提交结果；不显示实时 partial。"
+                        android:text="约 230 MB。模型下载后在本地识别，课堂音频不上传。VAD 按长句切分，约 1.8 秒停顿后提交结果；不显示实时 partial。"
                         android:textColor="?attr/colorOnPrimaryContainer"
                         android:alpha="0.72"
                         android:textSize="11sp" />

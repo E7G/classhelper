@@ -1,3 +1,10 @@
+## ClassHelper 1.12.8-asr-low-latency
+
+- 将 SenseVoice + Silero VAD 最短静音由 `2.0 s` 调至 `1.8 s`：本地样本对照中字符准确率约 `94.72%`（与原设置基本持平），final 最多提前约 200 ms。
+- 其余长语段设置不变：阈值 `0.48`、最短语音 `0.2 s`、最长 `30 s`；仍使用中文提示和 ITN。
+- 明确记录：该样本对照配套 VTT 尚未达到 95%，且 VTT 未经人工逐字校订；不把小幅参数波动宣传为准确率突破。
+- 升级到 `1.12.8-asr-low-latency`，避免覆盖已发布标签；同步更新设置页、ASR/架构文档和回归检查。
+
 ## ClassHelper 1.12.7-asr-accuracy
 
 - 将主课堂识别链路切换为 SenseVoiceSmall INT8 + Silero VAD，基于完整语段进行离线解码，减少流式短块上下文不足造成的漏识别和碎片化。

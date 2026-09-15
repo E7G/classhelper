@@ -105,7 +105,7 @@ for marker in [
     'OfflineRecognizer',
     'OfflineSenseVoiceModelConfig',
     'SileroVadModelConfig',
-    'minSilenceDuration = 2.0f',
+    'minSilenceDuration = 1.8f',
     'maxSpeechDuration = 30.0f',
     'listener?.onFinal(text)',
     'detector.flush()',
