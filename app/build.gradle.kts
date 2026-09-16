@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 226
-        versionName = "1.12.11-question-intent-filter"
+        versionCode = 227
+        versionName = "1.12.12-rich-ai-markdown-latex"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -127,6 +127,13 @@ dependencies {
     implementation("io.github.ahmerafzal1:ahmer-pdfviewer:2.0.1")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation(files(sherpaAar))
+
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:inline-parser:4.6.2")
+    implementation("io.noties.markwon:ext-latex:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jsoup:jsoup:1.18.3")

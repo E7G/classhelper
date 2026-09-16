@@ -1,3 +1,12 @@
+## ClassHelper 1.12.12-rich-ai-markdown-latex
+
+- AI 生成内容不再直接显示原始 Markdown/LaTeX：Reader 当前答案与历史答案/自动笔记统一使用 Android 原生富文本渲染。
+- 新增 Markdown 支持：标题、粗体/斜体、删除线、列表、引用、行内代码、代码块、表格、任务列表和链接均按富文本显示，不引入 WebView。
+- 新增 LaTeX 数学公式支持：兼容 `$...$`、`$$...$$`、`\\(...\\)`、`\\[...\\]`；代码块、行内代码与普通货币文本不会被误当成公式。
+- 新增“新建空白 PDF”：首页空状态和 Reader“更多”工具均提供入口，要求先输入 PDF 名称，然后创建一页 A4 空白 PDF 并立即打开。
+- 新建 PDF 使用 FileProvider + 现有 PdfWorkspaceManager 工作区链路，批注、自动保存、恢复、保存和另存逻辑与导入 PDF 保持一致。
+- 增加 Markdown/LaTeX 分隔符回归测试；版本提升到 `1.12.12-rich-ai-markdown-latex`。
+
 ## ClassHelper 1.12.11-question-intent-filter
 
 - 将问题识别从“停顿 + 疑问词”升级为分级意图判定：`STRONG` 强问题立即进入回答，`WEAK` 弱问题才进入短暂确认窗口。

@@ -3,12 +3,17 @@ package io.github.paper.classhelper.pdf
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.core.content.FileProvider
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import io.github.paper.classhelper.data.CourseDb
 import io.github.paper.classhelper.data.DocumentRow
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.UUID
 
 /**
  * Keeps a private working copy so PDFBox can safely edit the document.
@@ -19,6 +24,7 @@ class PdfWorkspaceManager(
     private val db: CourseDb
 ) {
     private val root = File(context.filesDir, "pdf-workspaces").apply { mkdirs() }
+    private val generatedRoot = File(context.filesDir, "generated-pdfs").apply { mkdirs() }
 
     data class Workspace(
         val id: String,
@@ -26,6 +32,26 @@ class PdfWorkspaceManager(
         val workingFile: File,
         val title: String
     )
+
+    /**
+     * Creates an app-owned one-page A4 PDF and returns a FileProvider Uri that can be opened through
+     * the exact same workspace/import path as any user-selected PDF. This keeps annotation, autosave,
+     * export and crash-recovery behavior identical for newly created and imported documents.
+     */
+    fun createBlankSource(requestedName: String): Uri {
+        val fileName = normalizePdfName(requestedName)
+        val dir = File(generatedRoot, UUID.randomUUID().toString()).apply { mkdirs() }
+        val source = File(dir, fileName)
+        PDDocument().use { document ->
+            document.addPage(PDPage(PDRectangle.A4))
+            document.save(source)
+        }
+        return FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            source,
+        )
+    }
 
     fun open(sourceUri: Uri): Workspace {
         val key = sha256(sourceUri.toString())
@@ -87,6 +113,17 @@ class PdfWorkspaceManager(
         return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }
+    }
+
+    private fun normalizePdfName(value: String): String {
+        val base = value.trim()
+            .removeSuffix(".pdf")
+            .removeSuffix(".PDF")
+            .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
+            .trim(' ', '.')
+            .take(96)
+            .ifBlank { "空白文档" }
+        return "$base.pdf"
     }
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
