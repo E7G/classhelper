@@ -119,6 +119,15 @@ if (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalQwen3AsrEngine.
 if (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalParaformerStreamingEngine.kt').exists():
     errors.append('ASR regression: old LocalParaformerStreamingEngine must stay removed')
 
+# v1.12.10 question latency regression: SenseVoice final already follows the 1.8 s VAD pause.
+# Do not stack a second fixed "thinking pause" after stable final before question handling.
+for forbidden in ['QUESTION_THINK_PAUSE_MS', 'questionPauseJob', 'speechRevision']:
+    if forbidden in service_text:
+        errors.append(f'Question latency regression: duplicate post-final pause state returned: {forbidden}')
+for marker in ['detector.mayBeQuestion(clean)', 'detector.accept(clean)?.let { questions.answer(it, sid) }']:
+    if marker not in service_text:
+        errors.append(f'Question latency regression: immediate stable-final question path missing: {marker}')
+
 # v1.5.3 download regression: Android 14+ must use UIDT; older releases keep the FGS fallback.
 downloader_service = ROOT/'app/src/main/java/io/github/paper/classhelper/classroom/AsrModelDownloadService.kt'
 if 'DownloadManager.Request(' in asr_manager or '.enqueue(request)' in asr_manager:
