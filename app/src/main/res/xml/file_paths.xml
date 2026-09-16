@@ -6,4 +6,7 @@
     <files-path
         name="ketangpai_view"
         path="ketangpai-view/" />
+    <files-path
+        name="generated_pdfs"
+        path="generated-pdfs/" />
 </paths>
