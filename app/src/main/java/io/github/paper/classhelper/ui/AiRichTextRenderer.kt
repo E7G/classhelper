@@ -84,7 +84,6 @@ object AiRichTextRenderer {
             JLatexMathPlugin.create(view.textSize, object : JLatexMathPlugin.BuilderConfigure {
                 override fun configureBuilder(builder: JLatexMathPlugin.Builder) {
                     builder.inlinesEnabled(true)
-                    builder.theme().textColor(view.currentTextColor)
                 }
             }),
         )
@@ -95,11 +94,14 @@ object AiRichTextRenderer {
 }
 
 /**
- * Markwon's LaTeX extension uses `$$...$$` for inline math and `$$` lines for blocks. AI providers
- * commonly emit the wider Markdown/LaTeX dialect (`$...$`, `\\(...\\)`, `\\[...\\]`), so normalize
- * those forms while leaving fenced/inline code untouched.
+ * Markwon's LaTeX extension uses double-dollar delimiters for inline math and double-dollar lines
+ * for blocks. AI providers commonly emit the wider Markdown/LaTeX dialect (single-dollar math,
+ * backslash-parentheses and backslash-brackets), so normalize those forms while leaving fenced and
+ * inline code untouched.
  */
 object MarkdownMathNormalizer {
+    private const val MARKWON_MATH = "\$\$"
+
     fun normalize(markdown: String): String {
         if (markdown.isEmpty()) return markdown
         val lines = markdown.split('\n')
@@ -122,10 +124,10 @@ object MarkdownMathNormalizer {
                 out.append(line)
             } else if (trimmed == "\\[") {
                 displayBracket = true
-                out.append("$$")
+                out.append(MARKWON_MATH)
             } else if (trimmed == "\\]" && displayBracket) {
                 displayBracket = false
-                out.append("$$")
+                out.append(MARKWON_MATH)
             } else if (displayBracket) {
                 out.append(line)
             } else {
@@ -171,7 +173,7 @@ object MarkdownMathNormalizer {
                 text.startsWith("\\(", i) -> {
                     val close = text.indexOf("\\)", i + 2)
                     if (close >= 0) {
-                        out.append("$$").append(text, i + 2, close).append("$$")
+                        out.append(MARKWON_MATH).append(text, i + 2, close).append(MARKWON_MATH)
                         i = close + 2
                     } else {
                         out.append(text[i++])
@@ -180,17 +182,17 @@ object MarkdownMathNormalizer {
                 text.startsWith("\\[", i) -> {
                     val close = text.indexOf("\\]", i + 2)
                     if (close >= 0) {
-                        out.append("$$").append(text, i + 2, close).append("$$")
+                        out.append(MARKWON_MATH).append(text, i + 2, close).append(MARKWON_MATH)
                         i = close + 2
                     } else {
                         out.append(text[i++])
                     }
                 }
-                text.startsWith("$$", i) -> {
-                    val close = text.indexOf("$$", i + 2)
+                text.startsWith(MARKWON_MATH, i) -> {
+                    val close = text.indexOf(MARKWON_MATH, i + MARKWON_MATH.length)
                     if (close >= 0) {
-                        out.append(text, i, close + 2)
-                        i = close + 2
+                        out.append(text, i, close + MARKWON_MATH.length)
+                        i = close + MARKWON_MATH.length
                     } else {
                         out.append(text.substring(i))
                         break
@@ -201,7 +203,7 @@ object MarkdownMathNormalizer {
                     if (close > i + 1) {
                         val body = text.substring(i + 1, close)
                         if (looksLikeMath(body)) {
-                            out.append("$$").append(body).append("$$")
+                            out.append(MARKWON_MATH).append(body).append(MARKWON_MATH)
                         } else {
                             out.append('$').append(body).append('$')
                         }
@@ -234,7 +236,7 @@ object MarkdownMathNormalizer {
     private fun looksLikeMath(body: String): Boolean {
         val value = body.trim()
         if (value.isEmpty()) return false
-        // Keep ordinary currency such as "$12.50$" readable instead of turning it into a formula.
+        // Keep ordinary currency-like values readable instead of turning them into formulas.
         if (value.matches(Regex("[+-]?\\d+(?:[.,]\\d+)?(?:\\s*(?:USD|CNY|RMB|元|美元|人民币))?", RegexOption.IGNORE_CASE))) {
             return false
         }
