@@ -48,8 +48,6 @@ stable ASR final
    ↓
 QuestionDetector.mayBeQuestion
    ↓
-quiet thinking-pause gate
-   ↓
 QuestionDetector.accept
    ↓
 current PDF + local references + recent transcript
@@ -59,7 +57,7 @@ optional OpenAI-compatible LLM
 answer preview/history
 ```
 
-本链路只发布稳定 final；尚未完成的 VAD 语段不会进入 LLM 问答。问句识别继续经过安静思考窗口后再触发回答。
+本链路只消费稳定 final；尚未完成的 VAD 语段不会进入 LLM 问答。由于 SenseVoice final 本身已经在约 `1.8 s` 尾静音后才产生，问题检测不再额外等待固定“思考停顿”，命中后立即进入资料检索与回答。误触发控制继续依赖 `QuestionDetector` 的问句评分、跨段组合和重复问题抑制。
 
 ## Knowledge path
 
@@ -95,6 +93,7 @@ recent transcript┘
 `tools/validate_source.py` 在 CI 中检查关键架构约束，包括：
 
 - SenseVoice/VAD 文件、长语段配置与 ASR 服务 wiring；
+- stable final 问题快路径不重新叠加固定思考停顿；
 - Android 14+ UIDT + 旧系统 FGS 下载路径；
 - PDF 批注标准保存路径；
 - Reader UI 的关键兼容性标记；

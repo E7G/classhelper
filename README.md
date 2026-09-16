@@ -1,4 +1,4 @@
-# ClassHelper Native 1.12.9
+# ClassHelper Native 1.12.10
 
 > Android 原生课堂听课助手：PDF 阅读/批注 + 本地课堂 ASR + 课堂问题检测 + 可选 LLM 抢答/笔记 + 学习通/课堂派课程资料接入。
 
@@ -6,7 +6,7 @@ ClassHelper Native 是一个 **PDF-first** 的 Android 课堂助手。核心目�
 
 主 ASR 为 **sherpa-onnx 1.13.5 + SenseVoiceSmall INT8 + Silero VAD**。长语音先由 VAD 保留上下文、按完整语句切分，再交给离线 SenseVoice 解码，优先提升课堂连续讲解的识别质量。
 
-当前版本：`1.12.9-no-live-subtitles`
+当前版本：`1.12.10-question-fastpath`
 
 ## 当前技术基线
 
@@ -127,7 +127,7 @@ ASR final
   ↓
 轻量问题候选判断
   ↓
-额外安静思考窗口
+问句评分 / 去重
   ↓
 本地资料检索
   ↓
@@ -135,6 +135,8 @@ OpenAI-compatible LLM（可选）
   ↓
 答案预览 / 课堂记录
 ```
+
+当前 SenseVoice final 本身已经在 Silero VAD 检测到约 `1.8 s` 尾静音后才产生，因此问题检测不再额外叠加固定“思考停顿”。一旦 stable final 命中问题判定，就立即进入资料检索和回答；相较 `1.12.9` 去掉了额外 `1.2 s` 固定等待。误触发控制仍由 `QuestionDetector` 的问句评分、跨段上下文与重复问题抑制负责。
 
 LLM 是可选层。没有配置 LLM 时，以下功能仍可正常使用：
 
@@ -194,6 +196,7 @@ AI 整理只写元数据建议，不自动移动、重命名或删除原文件�
 - Android WebView runtime
 - 显式 `WAKE_LOCK`
 - WorkManager 周期后台任务
+- stable final 后重复添加固定问题等待窗口
 
 语音在模型安装完成后本地识别。只有在你主动使用在线课程资料、下载模型、OCR 模型或配置 LLM 等网络功能时，相关网络请求才会发生。
 

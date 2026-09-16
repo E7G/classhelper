@@ -1,3 +1,11 @@
+## ClassHelper 1.12.10-question-fastpath
+
+- 移除 stable ASR final 之后额外的 `1.2 s` 问题“思考停顿”窗口；当前 SenseVoice + Silero VAD 本身已经要求约 `1.8 s` 尾静音才输出 final，因此不再重复等待。
+- 老师问题一旦形成 stable final，立即进入 `QuestionDetector`；命中后马上启动资料检索与可选 LLM 回答，正常路径相较上一版减少约 `1.2 s` 的固定等待。
+- 保留 `QuestionDetector` 的问句评分、跨段上下文与重复问题抑制，不通过降低判定阈值来换速度。
+- 增加源码回归检查，禁止重新引入 `QUESTION_THINK_PAUSE_MS`、`questionPauseJob`、`speechRevision` 这套二次等待状态。
+- 版本提升到 `1.12.10-question-fastpath`。
+
 ## ClassHelper 1.12.9-no-live-subtitles
 
 - 移除 Reader 中的实时字幕浮层以及 `LiveSubtitleController` 全局挂载。
