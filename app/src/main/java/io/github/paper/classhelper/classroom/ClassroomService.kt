@@ -74,8 +74,11 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
 
     @Volatile private var started = false
     @Volatile private var stopping = false
+    @Volatile private var speechActive = false
+    @Volatile private var speechEpoch = 0L
     private val finishSequenceStarted = AtomicBoolean(false)
     private var sessionId: String? = null
+    private var pendingWeakQuestionJob: Job? = null
     private var audioRestartJob: Job? = null
     private var watchdogJob: Job? = null
 
@@ -106,6 +109,10 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     private fun startListening() {
         started = true
         stopping = false
+        speechActive = false
+        speechEpoch = 0L
+        pendingWeakQuestionJob?.cancel()
+        pendingWeakQuestionJob = null
         finishSequenceStarted.set(false)
 
         val active = app.graph.settings.activeSessionId
@@ -193,6 +200,21 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         ioScope.launch { if (!stopping) updateNotification(snapshot) }
     }
 
+    override fun onSpeechStart() {
+        if (stopping) return
+        speechActive = true
+        speechEpoch += 1L
+        // A weak candidate is only useful when the teacher truly leaves room for an answer. As soon
+        // as VAD sees speech resume, drop it rather than converting an ordinary lecture pause into a
+        // false classroom question.
+        pendingWeakQuestionJob?.cancel()
+        pendingWeakQuestionJob = null
+    }
+
+    override fun onSpeechEnd() {
+        speechActive = false
+    }
+
     override fun onPartial(text: String) {
         if (stopping) return
         val snapshot = text
@@ -213,11 +235,29 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
 
         uiScope.launch { ClassroomBus.update { it.copy(partial = "") } }
 
-        // The active SenseVoice path already waits for 1.8 s of trailing silence before emitting a
-        // stable final. Treat that VAD boundary itself as the teacher pause instead of adding another
-        // fixed delay, so likely questions can enter retrieval/LLM immediately after finalization.
-        if (detector.mayBeQuestion(clean)) {
-            detector.accept(clean)?.let { questions.answer(it, sid) }
+        // Every new final supersedes a previously ambiguous candidate. Strong questions go straight
+        // through. Weak questions get a short speech-aware confirmation window; this is not a fixed
+        // delay for all questions, and VAD cancels it immediately if the teacher resumes speaking.
+        pendingWeakQuestionJob?.cancel()
+        pendingWeakQuestionJob = null
+        detector.classify(clean)?.let { candidate ->
+            when (candidate.confidence) {
+                QuestionDetector.Confidence.STRONG -> {
+                    detector.commit(candidate)?.let { questions.answer(it, sid) }
+                }
+                QuestionDetector.Confidence.WEAK -> {
+                    if (!speechActive) {
+                        val expectedSpeechEpoch = speechEpoch
+                        pendingWeakQuestionJob = eventScope.launch {
+                            delay(WEAK_QUESTION_CONFIRM_MS)
+                            if (!stopping && !speechActive && speechEpoch == expectedSpeechEpoch) {
+                                detector.commit(candidate)?.let { questions.answer(it, sid) }
+                            }
+                            pendingWeakQuestionJob = null
+                        }
+                    }
+                }
+            }
         }
 
         eventScope.launch {
@@ -265,6 +305,8 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         stopping = true
         watchdogJob?.cancel()
         audioRestartJob?.cancel()
+        pendingWeakQuestionJob?.cancel()
+        pendingWeakQuestionJob = null
         audio.stop()
         uiScope.launch {
             ClassroomBus.update { it.copy(listening = true, stopping = true, status = "正在停止录音并收尾…") }
@@ -314,6 +356,8 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
     override fun onDestroy() {
         watchdogJob?.cancel()
         audioRestartJob?.cancel()
+        pendingWeakQuestionJob?.cancel()
+        pendingWeakQuestionJob = null
         audio.stop()
         runCatching { asr.stop() }
         if (started && !stopping) {
@@ -399,6 +443,7 @@ class ClassroomService : Service(), StreamingAsrEngine.Listener {
         private const val AUDIO_RESTART_DELAY_MS = 700L
         private const val WATCHDOG_INTERVAL_MS = 2_500L
         private const val AUDIO_STALL_MS = 7_000L
+        private const val WEAK_QUESTION_CONFIRM_MS = 900L
         private const val ASR_FINISH_TIMEOUT_MS = 6_000L
         private const val FINAL_NOTE_TIMEOUT_MS = 12_000L
         private const val TAG = "ClassroomService"
