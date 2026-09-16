@@ -25,6 +25,7 @@ AudioRecord
 LocalSenseVoiceAsrEngine
    ↓
 sherpa-onnx Silero VAD → complete utterance
+   ├─→ speech start/end events
    ↓
 SenseVoiceSmall offline decode
    ↓
@@ -46,9 +47,12 @@ ClassroomService
 ```text
 stable ASR final
    ↓
-QuestionDetector.mayBeQuestion
-   ↓
-QuestionDetector.accept
+QuestionDetector.classify
+   ├─ lecture/explanation pattern → reject / down-weight
+   ├─ STRONG → commit → QuestionPipeline immediately
+   └─ WEAK → 900 ms speech-aware confirmation
+                    ├─ VAD speech resumes → cancel
+                    └─ remains quiet → commit → QuestionPipeline
    ↓
 current PDF + local references + recent transcript
    ↓
@@ -57,7 +61,9 @@ optional OpenAI-compatible LLM
 answer preview/history
 ```
 
-本链路只消费稳定 final；尚未完成的 VAD 语段不会进入 LLM 问答。由于 SenseVoice final 本身已经在约 `1.8 s` 尾静音后才产生，问题检测不再额外等待固定“思考停顿”，命中后立即进入资料检索与回答。误触发控制继续依赖 `QuestionDetector` 的问句评分、跨段组合和重复问题抑制。
+本链路只消费稳定 final；尚未完成的 VAD 语段不会进入 LLM 问答。SenseVoice final 本身已经在约 `1.8 s` 尾静音后才产生，因此不再对所有问题统一叠加固定“思考停顿”。明显问题保持快速路径；只有模棱两可的 `WEAK` 候选使用短确认，并在 Silero VAD 检测到老师重新开口时立即取消。
+
+`QuestionDetector` 使用课堂提示词加权、直接疑问句/问号特征、常见讲解句反例降权和近重复抑制。跨段上下文仅用于“大家想一想”一类提示型前置语段，不再无条件拼接普通讲解历史，减少误触发。
 
 ## Knowledge path
 
@@ -93,7 +99,8 @@ recent transcript┘
 `tools/validate_source.py` 在 CI 中检查关键架构约束，包括：
 
 - SenseVoice/VAD 文件、长语段配置与 ASR 服务 wiring；
-- stable final 问题快路径不重新叠加固定思考停顿；
+- 强问题即时路径、弱问题 VAD 取消路径以及讲解句过滤标记；
+- 不重新引入旧的统一固定问题等待状态；
 - Android 14+ UIDT + 旧系统 FGS 下载路径；
 - PDF 批注标准保存路径；
 - Reader UI 的关键兼容性标记；
