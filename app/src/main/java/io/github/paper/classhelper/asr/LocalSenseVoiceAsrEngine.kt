@@ -157,7 +157,14 @@ class LocalSenseVoiceAsrEngine(
                 detector.acceptWaveform(vadWindow)
                 vadWindowFill = 0
                 val speech = detector.isSpeechDetected()
-                if (speech && !speechWasDetected) listener?.onState("听到讲话 · 正在记录")
+                if (speech != speechWasDetected) {
+                    if (speech) {
+                        listener?.onSpeechStart()
+                        listener?.onState("听到讲话 · 正在记录")
+                    } else {
+                        listener?.onSpeechEnd()
+                    }
+                }
                 speechWasDetected = speech
                 drainVadSegments(detector)
             }
@@ -225,6 +232,7 @@ class LocalSenseVoiceAsrEngine(
             beforeReady.clear()
             beforeReadySamples = 0
             vadWindowFill = 0
+            if (speechWasDetected) listener?.onSpeechEnd()
             speechWasDetected = false
         }
         audioWorker.shutdown()
