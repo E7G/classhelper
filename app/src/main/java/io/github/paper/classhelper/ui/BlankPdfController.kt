@@ -132,12 +132,23 @@ object BlankPdfController {
                 if (activity.isFinishing || activity.isDestroyed) return@withContext
                 result.onSuccess { uri ->
                     dismiss()
+                    // Re-enter Reader through its normal ACTION_VIEW path instead of starting a
+                    // second Reader and immediately finishing the first one. That old sequence
+                    // races with the current workspace's onStop/save path when a PDF is already
+                    // open and can leave the newly-created PDF unopened. ReaderActivity uses the
+                    // default (standard) launch mode, so CLEAR_TOP replaces the current Reader
+                    // instance with a fresh one carrying the new URI. The outgoing Reader gets a
+                    // normal onStop callback and flushes its current workspace before teardown.
                     val intent = Intent(activity, ReaderActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
                         data = uri
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP,
+                        )
                     }
                     activity.startActivity(intent)
-                    activity.finish()
                 }.onFailure {
                     Toast.makeText(activity, "新建 PDF 失败：${it.message}", Toast.LENGTH_LONG).show()
                 }
