@@ -1,4 +1,4 @@
-# ClassHelper Native 1.12.10
+# ClassHelper Native 1.12.11
 
 > Android 原生课堂听课助手：PDF 阅读/批注 + 本地课堂 ASR + 课堂问题检测 + 可选 LLM 抢答/笔记 + 学习通/课堂派课程资料接入。
 
@@ -6,7 +6,7 @@ ClassHelper Native 是一个 **PDF-first** 的 Android 课堂助手。核心目�
 
 主 ASR 为 **sherpa-onnx 1.13.5 + SenseVoiceSmall INT8 + Silero VAD**。长语音先由 VAD 保留上下文、按完整语句切分，再交给离线 SenseVoice 解码，优先提升课堂连续讲解的识别质量。
 
-当前版本：`1.12.10-question-fastpath`
+当前版本：`1.12.11-question-intent-filter`
 
 ## 当前技术基线
 
@@ -118,25 +118,26 @@ watchdog 只在 `AudioRecord` 异常时重建录音端，不会在课堂中途�
 
 ## 6. 老师问题检测与 LLM
 
-问题检测只消费稳定 final，不直接拿尚未稳定的 partial 去请求 LLM。
+问题检测只消费稳定 final，不直接拿尚未稳定的 partial 去请求 LLM。VAD 停顿只作为“语段结束”的证据，不再等同于“老师提出了问题”。
 
 流程大致为：
 
 ```text
-ASR final
+ASR stable final
   ↓
-轻量问题候选判断
-  ↓
-问句评分 / 去重
-  ↓
-本地资料检索
-  ↓
-OpenAI-compatible LLM（可选）
-  ↓
-答案预览 / 课堂记录
+课堂问题意图评分
+  ├─ 讲解句反例（我们来看为什么… / 下面讲一下怎么…）→ 降权或忽略
+  ├─ STRONG：直接疑问句 / 问号 / 明确课堂提问提示 → 立即回答
+  └─ WEAK：模棱两可的疑问表达 → 0.9 s 讲话感知确认
+                                      ↓
+                          老师重新开口？是 → 取消
+                                      ↓ 否
+                                资料检索 / LLM
 ```
 
-当前 SenseVoice final 本身已经在 Silero VAD 检测到约 `1.8 s` 尾静音后才产生，因此问题检测不再额外叠加固定“思考停顿”。一旦 stable final 命中问题判定，就立即进入资料检索和回答；相较 `1.12.9` 去掉了额外 `1.2 s` 固定等待。误触发控制仍由 `QuestionDetector` 的问句评分、跨段上下文与重复问题抑制负责。
+当前 SenseVoice final 本身已经在 Silero VAD 检测到约 `1.8 s` 尾静音后才产生。高置信问题不再额外等待；只有弱问题才使用 `0.9 s` 的短确认窗口，而且 Silero VAD 一旦检测到老师继续讲话就立即取消候选。这样既保留明显提问的响应速度，又降低普通讲解中“为什么 / 怎么 / 什么”等词造成的频繁误触发。
+
+`QuestionDetector` 还保留跨段课堂提示上下文与近重复抑制，例如“大家想一想”可为下一段真实问题加权，但普通讲解历史不会被无条件拼接放大分数。
 
 LLM 是可选层。没有配置 LLM 时，以下功能仍可正常使用：
 
@@ -196,7 +197,8 @@ AI 整理只写元数据建议，不自动移动、重命名或删除原文件�
 - Android WebView runtime
 - 显式 `WAKE_LOCK`
 - WorkManager 周期后台任务
-- stable final 后重复添加固定问题等待窗口
+- 所有问题重新叠加统一固定等待
+- 丢失强/弱问题分级、讲解句过滤或 VAD 讲话取消链路
 
 语音在模型安装完成后本地识别。只有在你主动使用在线课程资料、下载模型、OCR 模型或配置 LLM 等网络功能时，相关网络请求才会发生。
 
