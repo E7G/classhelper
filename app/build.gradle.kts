@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 225
-        versionName = "1.12.10-question-fastpath"
+        versionCode = 226
+        versionName = "1.12.11-question-intent-filter"
         vectorDrawables.useSupportLibrary = true
     }
 
