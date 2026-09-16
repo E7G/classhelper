@@ -1,3 +1,10 @@
+## ClassHelper 1.12.13-blank-pdf-switch-fix
+
+- 修复已经打开 PDF 时，通过 Reader“更多 → 新建 PDF”创建空白 PDF 后无法可靠切换并打开新文件的问题。
+- 移除“启动第二个 Reader 后立刻手动 finish 当前 Reader”的竞态路径；改为通过标准 `ACTION_VIEW + FLAG_ACTIVITY_CLEAR_TOP` 重新进入 Reader，让当前文档正常执行 `onStop` 保存，再由新的 Reader 实例加载新建 PDF URI。
+- 保留空白 PDF 的原有行为：要求输入名称、生成单页 A4 PDF、立即进入现有工作区，继续支持批注、自动保存、恢复、保存与另存。
+- 版本提升到 `1.12.13-blank-pdf-switch-fix`。
+
 ## ClassHelper 1.12.12-rich-ai-markdown-latex
 
 - AI 生成内容不再直接显示原始 Markdown/LaTeX：Reader 当前答案与历史答案/自动笔记统一使用 Android 原生富文本渲染。
