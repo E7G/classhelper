@@ -9,7 +9,6 @@ import io.github.paper.classhelper.knowledge.KnowledgeRepository
 import io.github.paper.classhelper.llm.LlmClient
 import io.github.paper.classhelper.pdf.PdfWorkspaceManager
 import io.github.paper.classhelper.ocr.OcrModelManager
-import io.github.paper.classhelper.ui.LiveSubtitleController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,7 +40,6 @@ class ClassHelperApp : Application() {
             knowledge = KnowledgeRepository(db),
             llm = LlmClient(settings)
         )
-        LiveSubtitleController.install(this)
     }
 }
 
