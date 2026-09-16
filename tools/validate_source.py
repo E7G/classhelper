@@ -119,14 +119,40 @@ if (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalQwen3AsrEngine.
 if (ROOT/'app/src/main/java/io/github/paper/classhelper/asr/LocalParaformerStreamingEngine.kt').exists():
     errors.append('ASR regression: old LocalParaformerStreamingEngine must stay removed')
 
-# v1.12.10 question latency regression: SenseVoice final already follows the 1.8 s VAD pause.
-# Do not stack a second fixed "thinking pause" after stable final before question handling.
+# v1.12.11 question-intent regression: VAD pause is evidence, not the question classifier.
+# Strong questions must remain immediate; only ambiguous candidates may use the short speech-aware
+# confirmation window, which is cancelled as soon as VAD detects resumed speech.
+detector_path = ROOT/'app/src/main/java/io/github/paper/classhelper/classroom/QuestionDetector.kt'
+detector_text = detector_path.read_text(errors='ignore') if detector_path.exists() else ''
 for forbidden in ['QUESTION_THINK_PAUSE_MS', 'questionPauseJob', 'speechRevision']:
     if forbidden in service_text:
-        errors.append(f'Question latency regression: duplicate post-final pause state returned: {forbidden}')
-for marker in ['detector.mayBeQuestion(clean)', 'detector.accept(clean)?.let { questions.answer(it, sid) }']:
+        errors.append(f'Question latency regression: old fixed post-final pause state returned: {forbidden}')
+for marker in [
+    'detector.classify(clean)',
+    'QuestionDetector.Confidence.STRONG',
+    'QuestionDetector.Confidence.WEAK',
+    'pendingWeakQuestionJob',
+    'WEAK_QUESTION_CONFIRM_MS = 900L',
+    'speechEpoch',
+    'override fun onSpeechStart()',
+    'delay(WEAK_QUESTION_CONFIRM_MS)',
+]:
     if marker not in service_text:
-        errors.append(f'Question latency regression: immediate stable-final question path missing: {marker}')
+        errors.append(f'Question intent regression: adaptive question path missing: {marker}')
+for marker in ['listener?.onSpeechStart()', 'listener?.onSpeechEnd()']:
+    if marker not in voice_text:
+        errors.append(f'Question intent regression: VAD speech transition missing: {marker}')
+for marker in [
+    'enum class Confidence { WEAK, STRONG }',
+    'strongClassroomPrompts',
+    'explanatoryPatterns',
+    'isExplanatory',
+    'DUPLICATE_THRESHOLD',
+]:
+    if marker not in detector_text:
+        errors.append(f'Question intent regression: detector confidence/filter marker missing: {marker}')
+if 'QuestionDetector.Confidence.STRONG -> {' not in service_text or 'detector.commit(candidate)?.let { questions.answer(it, sid) }' not in service_text:
+    errors.append('Question latency regression: strong questions must still enter answer path immediately')
 
 # v1.5.3 download regression: Android 14+ must use UIDT; older releases keep the FGS fallback.
 downloader_service = ROOT/'app/src/main/java/io/github/paper/classhelper/classroom/AsrModelDownloadService.kt'
