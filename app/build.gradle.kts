@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 223
-        versionName = "1.12.8-asr-low-latency"
+        versionCode = 224
+        versionName = "1.12.9-no-live-subtitles"
         vectorDrawables.useSupportLibrary = true
     }
 

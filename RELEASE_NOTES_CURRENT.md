@@ -1,3 +1,10 @@
+## ClassHelper 1.12.9-no-live-subtitles
+
+- 移除 Reader 中的实时字幕浮层以及 `LiveSubtitleController` 全局挂载。
+- SenseVoice + Silero VAD 仍继续用于课堂语音转写；稳定 final 仍会进入课堂记录、问题检测、PDF 匹配与自动笔记，不影响现有课堂处理链路。
+- 原因是当前主 ASR 为完整 VAD 语段结束后再进行离线解码，不产生真正实时的 partial；继续保留“实时字幕”会造成体验和语义上的误导。
+- 版本提升到 `1.12.9-no-live-subtitles`，避免覆盖已发布的 `1.12.8` Release。
+
 ## ClassHelper 1.12.8-asr-low-latency
 
 - 将 SenseVoice + Silero VAD 最短静音由 `2.0 s` 调至 `1.8 s`：本地样本对照中字符准确率约 `94.72%`（与原设置基本持平），final 最多提前约 200 ms。

@@ -1,4 +1,4 @@
-# ClassHelper Native 1.12.8
+# ClassHelper Native 1.12.9
 
 > Android 原生课堂听课助手：PDF 阅读/批注 + 本地课堂 ASR + 课堂问题检测 + 可选 LLM 抢答/笔记 + 学习通/课堂派课程资料接入。
 
@@ -6,7 +6,7 @@ ClassHelper Native 是一个 **PDF-first** 的 Android 课堂助手。核心目�
 
 主 ASR 为 **sherpa-onnx 1.13.5 + SenseVoiceSmall INT8 + Silero VAD**。长语音先由 VAD 保留上下文、按完整语句切分，再交给离线 SenseVoice 解码，优先提升课堂连续讲解的识别质量。
 
-当前版本：`1.12.8-asr-low-latency`
+当前版本：`1.12.9-no-live-subtitles`
 
 ## 当前技术基线
 
@@ -53,7 +53,7 @@ stable final → 课堂记录 / 问题检测 / PDF 匹配 / 自动笔记
 - 单段最长：`30 s`；较长上下文能减少老师句中停顿导致的碎片化
 - 音频持续采集；每个完整 VAD 语段异步解码一次，再只将稳定 final 送入课堂后续流水线
 
-此链路不产生实时 partial，也不使用课程热词偏置；设置页会明确说明该取舍。
+此链路不产生实时 partial，也不使用课程热词偏置；设置页会明确说明该取舍。由于当前结果不是实时输出，Reader 已移除实时字幕浮层；稳定 final 仍会保存为课堂转写并继续用于问题检测、PDF 匹配和自动笔记。
 
 详见 [`docs/LOCAL_ASR.md`](docs/LOCAL_ASR.md)。
 
@@ -147,7 +147,7 @@ API Key 通过应用的 SecretStore 保存；局域网无鉴权兼容接口也�
 
 ## 7. 自动课堂笔记
 
-课堂原始 transcript 与 AI 整理结果分开保存。自动笔记走低优先级通道，不阻塞实时 ASR 和老师问题抢答。
+课堂原始 transcript 与 AI 整理结果分开保存。自动笔记走低优先级通道，不阻塞语音采集和主 ASR 解码。
 
 资料检索优先使用当前 PDF、相关 PDF 文本/便签、导入参考资料以及最近课堂记录，再交给可选 LLM 做回答或整理。
 
