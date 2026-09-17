@@ -6,9 +6,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
 import android.view.ViewGroup
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.Toast
+import com.ahmer.pdfviewer.PDFView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
@@ -23,7 +23,6 @@ import kotlinx.coroutines.withContext
 object BlankPdfController {
     private const val EMPTY_BUTTON_TAG = "classhelper_blank_pdf_empty"
     private const val TOP_BUTTON_TAG = "classhelper_blank_pdf_top"
-    private const val TOOL_BUTTON_TAG = "classhelper_blank_pdf_tool"
 
     fun install(application: Application) {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -46,7 +45,6 @@ object BlankPdfController {
         if (activity !is ReaderActivity) return
         addEmptyStateButton(activity)
         addTopBarButton(activity)
-        addToolButton(activity)
     }
 
     private fun addEmptyStateButton(activity: ReaderActivity) {
@@ -70,7 +68,7 @@ object BlankPdfController {
         )
     }
 
-    /** Always-visible while Reader chrome is visible; no need to discover the More menu first. */
+    /** Always visible beside “打开” whenever the Reader chrome is visible. */
     private fun addTopBarButton(activity: ReaderActivity) {
         val open = activity.findViewById<MaterialButton>(R.id.openButton) ?: return
         val row = open.parent as? LinearLayout ?: return
@@ -92,28 +90,6 @@ object BlankPdfController {
             LinearLayout.LayoutParams(dp(activity, 62), dp(activity, 46)).apply {
                 marginStart = dp(activity, 2)
             },
-        )
-    }
-
-    /** Keep a second explicit entry in More tools for users who look there first. */
-    private fun addToolButton(activity: ReaderActivity) {
-        val scroll = activity.findViewById<HorizontalScrollView>(R.id.moreToolsBar) ?: return
-        val row = scroll.getChildAt(0) as? LinearLayout ?: return
-        if (row.findViewWithTag<MaterialButton>(TOOL_BUTTON_TAG) != null) return
-
-        val button = MaterialButton(activity).apply {
-            tag = TOOL_BUTTON_TAG
-            text = "新建 PDF"
-            isAllCaps = false
-            minWidth = 0
-            contentDescription = "新建并打开空白 PDF"
-            setPadding(dp(activity, 14), 0, dp(activity, 14), 0)
-            setOnClickListener { promptForName(activity) }
-        }
-        row.addView(
-            button,
-            0,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(activity, 46)),
         )
     }
 
@@ -164,17 +140,19 @@ object BlankPdfController {
                 if (activity.isFinishing || activity.isDestroyed) return@withContext
                 result.onSuccess { uri ->
                     dismiss()
-                    // ReaderActivity uses the standard launch mode. Start a normal new Reader
-                    // instead of CLEAR_TOP: CLEAR_TOP can deliver onNewIntent() to the current
-                    // instance, while Reader does not use intents as its document-switch API.
-                    // Leaving the current Reader on the stack also lets its normal onStop() flush
-                    // the old workspace before the new Reader opens the blank PDF.
-                    val intent = Intent(activity, ReaderActivity::class.java).apply {
+
+                    // Do not stack ReaderActivity instances. Each Reader owns PDFView bitmap caches,
+                    // annotation state and rich-text math drawables; keeping old Readers on the back
+                    // stack can exhaust the 512 MiB app heap after several document switches.
+                    // Recreate the current Reader with the new URI instead: onStop still flushes the
+                    // old workspace, while recycle() releases PDF page bitmaps immediately.
+                    activity.findViewById<PDFView>(R.id.pdfView)?.recycle()
+                    activity.intent = Intent(activity.intent).apply {
                         action = Intent.ACTION_VIEW
                         data = uri
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     }
-                    activity.startActivity(intent)
+                    activity.recreate()
                 }.onFailure {
                     Toast.makeText(activity, "新建 PDF 失败：${it.message}", Toast.LENGTH_LONG).show()
                 }
