@@ -19,14 +19,24 @@ import java.util.WeakHashMap
 /**
  * Renders AI-authored content as native Android rich text instead of exposing raw Markdown/LaTeX.
  *
- * ReaderActivity deliberately stays unaware of the renderer: its existing `.text = ...` updates are
- * observed here, so live answers and persisted answer/note history follow the exact same rendering
- * path. Markwon renders to Spannable/Drawable content; no WebView or HTML surface is introduced.
+ * ReaderActivity still assigns normal text. This observer turns those assignments into Markwon
+ * spans, while aggressively reusing an already-rendered result when the same classroom state is
+ * emitted again. That matters because LaTeX spans carry Drawables and repeated parsing of an
+ * unchanged answer can otherwise create large short-lived allocations next to PDFView's bitmap
+ * cache and push the process into OOM.
  */
 object AiRichTextRenderer {
+    private const val MAX_ANSWER_CHARS = 48_000
+    private const val MAX_HISTORY_CHARS = 24_000
+    private const val TRUNCATED_NOTICE = "\n\n> 内容过长，界面显示已截断；完整内容仍保存在课堂记录中。"
+
+    private data class RenderKey(val length: Int, val hash: Int)
+
     private val boundViews = Collections.newSetFromMap(WeakHashMap<TextView, Boolean>())
     private val renderingViews = Collections.newSetFromMap(WeakHashMap<TextView, Boolean>())
     private val markwonByView = WeakHashMap<TextView, Markwon>()
+    private val lastKeyByView = WeakHashMap<TextView, RenderKey>()
+    private val lastRenderedByView = WeakHashMap<TextView, CharSequence>()
 
     fun install(application: Application) {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -48,8 +58,7 @@ object AiRichTextRenderer {
     private fun bind(view: TextView?) {
         if (view == null || !boundViews.add(view)) return
 
-        val markwon = buildMarkwon(view)
-        markwonByView[view] = markwon
+        markwonByView[view] = buildMarkwon(view)
         val watcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
@@ -65,32 +74,70 @@ object AiRichTextRenderer {
     }
 
     private fun render(view: TextView, raw: String) {
+        val display = boundedForDisplay(view, raw)
+        val key = RenderKey(display.length, display.hashCode())
+
+        // ClassroomBus emits for status/transcript/page changes as well as answer changes. Reader's
+        // normal `.text = state.answer` therefore often assigns the same answer repeatedly. Restore
+        // the previous Spannable instead of reparsing Markdown/LaTeX and allocating new math drawables.
+        if (lastKeyByView[view] == key) {
+            val rendered = lastRenderedByView[view]
+            if (rendered != null && view.text !== rendered) {
+                if (!renderingViews.add(view)) return
+                try {
+                    view.text = rendered
+                } finally {
+                    renderingViews.remove(view)
+                }
+            }
+            return
+        }
+
         if (!renderingViews.add(view)) return
         try {
             val markwon = markwonByView[view] ?: buildMarkwon(view).also { markwonByView[view] = it }
-            markwon.setMarkdown(view, MarkdownMathNormalizer.normalize(raw))
-        } catch (_: Throwable) {
-            // Rendering must never hide an answer. Fall back to the raw source on malformed Markdown
-            // or an unsupported LaTeX command instead of crashing the classroom UI.
-            view.text = raw
+            markwon.setMarkdown(view, MarkdownMathNormalizer.normalize(display))
+            lastKeyByView[view] = key
+            lastRenderedByView[view] = view.text
+        } catch (_: Exception) {
+            // Rendering must never hide an answer. Fall back to bounded raw source on malformed
+            // Markdown or unsupported LaTeX. Deliberately do not catch OutOfMemoryError here.
+            view.text = display
+            lastKeyByView[view] = key
+            lastRenderedByView[view] = view.text
         } finally {
             renderingViews.remove(view)
         }
     }
 
-    private fun buildMarkwon(view: TextView): Markwon = Markwon.builder(view.context)
-        .usePlugin(MarkwonInlineParserPlugin.create())
-        .usePlugin(
-            JLatexMathPlugin.create(view.textSize, object : JLatexMathPlugin.BuilderConfigure {
-                override fun configureBuilder(builder: JLatexMathPlugin.Builder) {
-                    builder.inlinesEnabled(true)
-                }
-            }),
-        )
-        .usePlugin(StrikethroughPlugin.create())
-        .usePlugin(TablePlugin.create(view.context))
-        .usePlugin(TaskListPlugin.create(view.context))
-        .build()
+    private fun boundedForDisplay(view: TextView, raw: String): String {
+        val maxChars = when (view.id) {
+            R.id.historyText -> MAX_HISTORY_CHARS
+            R.id.answerPreview -> MAX_ANSWER_CHARS
+            else -> MAX_ANSWER_CHARS
+        }
+        if (raw.length <= maxChars) return raw
+        return raw.take(maxChars) + TRUNCATED_NOTICE
+    }
+
+    private fun buildMarkwon(view: TextView): Markwon {
+        // Never let a cached renderer retain a ReaderActivity through its Context. A WeakHashMap
+        // key is not enough if the value points back to Activity -> View hierarchy -> key.
+        val appContext = view.context.applicationContext
+        return Markwon.builder(appContext)
+            .usePlugin(MarkwonInlineParserPlugin.create())
+            .usePlugin(
+                JLatexMathPlugin.create(view.textSize, object : JLatexMathPlugin.BuilderConfigure {
+                    override fun configureBuilder(builder: JLatexMathPlugin.Builder) {
+                        builder.inlinesEnabled(true)
+                    }
+                }),
+            )
+            .usePlugin(StrikethroughPlugin.create())
+            .usePlugin(TablePlugin.create(appContext))
+            .usePlugin(TaskListPlugin.create(appContext))
+            .build()
+    }
 }
 
 /**

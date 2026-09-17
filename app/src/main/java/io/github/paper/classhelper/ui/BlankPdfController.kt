@@ -6,9 +6,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
 import android.view.ViewGroup
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.Toast
+import com.ahmer.pdfviewer.PDFView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
@@ -18,14 +18,11 @@ import io.github.paper.classhelper.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Collections
-import java.util.WeakHashMap
 
-/** Adds discoverable "new blank PDF" entry points to Reader without creating a second PDF editor path. */
+/** Adds always-discoverable "new blank PDF" entry points to Reader. */
 object BlankPdfController {
     private const val EMPTY_BUTTON_TAG = "classhelper_blank_pdf_empty"
-    private const val TOOL_BUTTON_TAG = "classhelper_blank_pdf_tool"
-    private val boundActivities = Collections.newSetFromMap(WeakHashMap<Activity, Boolean>())
+    private const val TOP_BUTTON_TAG = "classhelper_blank_pdf_top"
 
     fun install(application: Application) {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -35,14 +32,23 @@ object BlankPdfController {
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivityStopped(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) { boundActivities.remove(activity) }
+            override fun onActivityDestroyed(activity: Activity) {
+                if (activity is ReaderActivity) {
+                    runCatching { activity.findViewById<PDFView>(R.id.pdfView)?.recycle() }
+                }
+            }
         })
     }
 
+    /**
+     * Binding is intentionally idempotent and retried on resume. Previous builds marked an
+     * Activity as bound before verifying that its views were ready; when that first lookup failed,
+     * the entry points were never installed for that Reader instance.
+     */
     private fun bind(activity: Activity) {
-        if (activity !is ReaderActivity || !boundActivities.add(activity)) return
+        if (activity !is ReaderActivity) return
         addEmptyStateButton(activity)
-        addToolButton(activity)
+        addTopBarButton(activity)
     }
 
     private fun addEmptyStateButton(activity: ReaderActivity) {
@@ -54,6 +60,7 @@ object BlankPdfController {
             tag = EMPTY_BUTTON_TAG
             text = "新建空白 PDF"
             isAllCaps = false
+            contentDescription = "新建并打开空白 PDF"
             setOnClickListener { promptForName(activity) }
         }
         parent.addView(
@@ -65,23 +72,28 @@ object BlankPdfController {
         )
     }
 
-    private fun addToolButton(activity: ReaderActivity) {
-        val scroll = activity.findViewById<HorizontalScrollView>(R.id.moreToolsBar) ?: return
-        val row = scroll.getChildAt(0) as? LinearLayout ?: return
-        if (row.findViewWithTag<MaterialButton>(TOOL_BUTTON_TAG) != null) return
+    /** Always visible beside “打开” whenever the Reader chrome is visible. */
+    private fun addTopBarButton(activity: ReaderActivity) {
+        val open = activity.findViewById<MaterialButton>(R.id.openButton) ?: return
+        val row = open.parent as? LinearLayout ?: return
+        if (row.findViewWithTag<MaterialButton>(TOP_BUTTON_TAG) != null) return
 
         val button = MaterialButton(activity).apply {
-            tag = TOOL_BUTTON_TAG
-            text = "新建 PDF"
+            tag = TOP_BUTTON_TAG
+            text = "新建"
             isAllCaps = false
             minWidth = 0
-            setPadding(dp(activity, 14), 0, dp(activity, 14), 0)
+            textSize = 10f
+            contentDescription = "新建并打开空白 PDF"
+            setPadding(dp(activity, 8), 0, dp(activity, 8), 0)
             setOnClickListener { promptForName(activity) }
         }
         row.addView(
             button,
-            0,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(activity, 46)),
+            (row.indexOfChild(open) + 1).coerceAtMost(row.childCount),
+            LinearLayout.LayoutParams(dp(activity, 62), dp(activity, 46)).apply {
+                marginStart = dp(activity, 2)
+            },
         )
     }
 
@@ -132,23 +144,19 @@ object BlankPdfController {
                 if (activity.isFinishing || activity.isDestroyed) return@withContext
                 result.onSuccess { uri ->
                     dismiss()
-                    // Re-enter Reader through its normal ACTION_VIEW path instead of starting a
-                    // second Reader and immediately finishing the first one. That old sequence
-                    // races with the current workspace's onStop/save path when a PDF is already
-                    // open and can leave the newly-created PDF unopened. ReaderActivity uses the
-                    // default (standard) launch mode, so CLEAR_TOP replaces the current Reader
-                    // instance with a fresh one carrying the new URI. The outgoing Reader gets a
-                    // normal onStop callback and flushes its current workspace before teardown.
-                    val intent = Intent(activity, ReaderActivity::class.java).apply {
+
+                    // Do not stack ReaderActivity instances. Each Reader owns PDFView bitmap caches,
+                    // annotation state and rich-text math drawables; keeping old Readers on the back
+                    // stack can exhaust the 512 MiB app heap after several document switches.
+                    // Recreate the current Reader with the new URI instead: onStop still flushes the
+                    // old workspace, while recycle() releases PDF page bitmaps immediately.
+                    activity.findViewById<PDFView>(R.id.pdfView)?.recycle()
+                    activity.intent = Intent(activity.intent).apply {
                         action = Intent.ACTION_VIEW
                         data = uri
-                        addFlags(
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP,
-                        )
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     }
-                    activity.startActivity(intent)
+                    activity.recreate()
                 }.onFailure {
                     Toast.makeText(activity, "新建 PDF 失败：${it.message}", Toast.LENGTH_LONG).show()
                 }

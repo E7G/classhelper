@@ -1,3 +1,14 @@
+## ClassHelper 1.12.14-visible-blank-pdf-entry
+
+- 修复“新建空白 PDF”入口不可见：去掉一次性绑定状态，Reader 每次 resume 都会幂等检查并补齐入口；未打开 PDF 时首页显示“新建空白 PDF”，已打开 PDF 时顶部“打开”旁固定显示“新建”。
+- 按当前交互要求，不再在“更多工具”中保留新建 PDF 入口。
+- 修复文档切换造成的内存累积：不再把新的 `ReaderActivity` 一层层压入返回栈；创建空白 PDF 后先回收当前 `PDFView` 页面位图，再用当前 Reader `recreate()` 加载新 URI，旧 workspace 仍通过正常 `onStop` 路径写回。
+- `ReaderActivity` 销毁时额外回收 `PDFView`，降低页面位图缓存残留风险。
+- 修复 AI Markdown/LaTeX 渲染的高内存压力：同一答案/历史内容重复赋值时复用已有 Spannable/公式 Drawable，不再重复解析；当前答案最多渲染 48k 字符、历史区最多渲染 24k 字符，完整内容仍保存在数据库与导出记录中。
+- Markwon/Table 渲染器改用 `applicationContext`，避免缓存 value 通过 Activity context 反向持有整个 Reader/View 层级。
+- 不使用 `largeHeap` 掩盖问题；针对本次约 512 MiB heap OOM 直接减少 Reader、PDF bitmap 与公式 Drawable 的生命周期和重复分配。
+- 版本提升到 `1.12.14-visible-blank-pdf-entry`。
+
 ## ClassHelper 1.12.13-blank-pdf-switch-fix
 
 - 修复已经打开 PDF 时，通过 Reader“更多 → 新建 PDF”创建空白 PDF 后无法可靠切换并打开新文件的问题。
