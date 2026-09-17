@@ -18,14 +18,12 @@ import io.github.paper.classhelper.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Collections
-import java.util.WeakHashMap
 
-/** Adds discoverable "new blank PDF" entry points to Reader without creating a second PDF editor path. */
+/** Adds always-discoverable "new blank PDF" entry points to Reader. */
 object BlankPdfController {
     private const val EMPTY_BUTTON_TAG = "classhelper_blank_pdf_empty"
+    private const val TOP_BUTTON_TAG = "classhelper_blank_pdf_top"
     private const val TOOL_BUTTON_TAG = "classhelper_blank_pdf_tool"
-    private val boundActivities = Collections.newSetFromMap(WeakHashMap<Activity, Boolean>())
 
     fun install(application: Application) {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -35,13 +33,19 @@ object BlankPdfController {
             override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivityStopped(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) { boundActivities.remove(activity) }
+            override fun onActivityDestroyed(activity: Activity) = Unit
         })
     }
 
+    /**
+     * Binding is intentionally idempotent and retried on resume. Previous builds marked an
+     * Activity as bound before verifying that its views were ready; when that first lookup failed,
+     * the entry points were never installed for that Reader instance.
+     */
     private fun bind(activity: Activity) {
-        if (activity !is ReaderActivity || !boundActivities.add(activity)) return
+        if (activity !is ReaderActivity) return
         addEmptyStateButton(activity)
+        addTopBarButton(activity)
         addToolButton(activity)
     }
 
@@ -54,6 +58,7 @@ object BlankPdfController {
             tag = EMPTY_BUTTON_TAG
             text = "新建空白 PDF"
             isAllCaps = false
+            contentDescription = "新建并打开空白 PDF"
             setOnClickListener { promptForName(activity) }
         }
         parent.addView(
@@ -65,6 +70,32 @@ object BlankPdfController {
         )
     }
 
+    /** Always-visible while Reader chrome is visible; no need to discover the More menu first. */
+    private fun addTopBarButton(activity: ReaderActivity) {
+        val open = activity.findViewById<MaterialButton>(R.id.openButton) ?: return
+        val row = open.parent as? LinearLayout ?: return
+        if (row.findViewWithTag<MaterialButton>(TOP_BUTTON_TAG) != null) return
+
+        val button = MaterialButton(activity).apply {
+            tag = TOP_BUTTON_TAG
+            text = "新建"
+            isAllCaps = false
+            minWidth = 0
+            textSize = 10f
+            contentDescription = "新建并打开空白 PDF"
+            setPadding(dp(activity, 8), 0, dp(activity, 8), 0)
+            setOnClickListener { promptForName(activity) }
+        }
+        row.addView(
+            button,
+            (row.indexOfChild(open) + 1).coerceAtMost(row.childCount),
+            LinearLayout.LayoutParams(dp(activity, 62), dp(activity, 46)).apply {
+                marginStart = dp(activity, 2)
+            },
+        )
+    }
+
+    /** Keep a second explicit entry in More tools for users who look there first. */
     private fun addToolButton(activity: ReaderActivity) {
         val scroll = activity.findViewById<HorizontalScrollView>(R.id.moreToolsBar) ?: return
         val row = scroll.getChildAt(0) as? LinearLayout ?: return
@@ -75,6 +106,7 @@ object BlankPdfController {
             text = "新建 PDF"
             isAllCaps = false
             minWidth = 0
+            contentDescription = "新建并打开空白 PDF"
             setPadding(dp(activity, 14), 0, dp(activity, 14), 0)
             setOnClickListener { promptForName(activity) }
         }
@@ -132,21 +164,15 @@ object BlankPdfController {
                 if (activity.isFinishing || activity.isDestroyed) return@withContext
                 result.onSuccess { uri ->
                     dismiss()
-                    // Re-enter Reader through its normal ACTION_VIEW path instead of starting a
-                    // second Reader and immediately finishing the first one. That old sequence
-                    // races with the current workspace's onStop/save path when a PDF is already
-                    // open and can leave the newly-created PDF unopened. ReaderActivity uses the
-                    // default (standard) launch mode, so CLEAR_TOP replaces the current Reader
-                    // instance with a fresh one carrying the new URI. The outgoing Reader gets a
-                    // normal onStop callback and flushes its current workspace before teardown.
+                    // ReaderActivity uses the standard launch mode. Start a normal new Reader
+                    // instead of CLEAR_TOP: CLEAR_TOP can deliver onNewIntent() to the current
+                    // instance, while Reader does not use intents as its document-switch API.
+                    // Leaving the current Reader on the stack also lets its normal onStop() flush
+                    // the old workspace before the new Reader opens the blank PDF.
                     val intent = Intent(activity, ReaderActivity::class.java).apply {
                         action = Intent.ACTION_VIEW
                         data = uri
-                        addFlags(
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP,
-                        )
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     }
                     activity.startActivity(intent)
                 }.onFailure {
