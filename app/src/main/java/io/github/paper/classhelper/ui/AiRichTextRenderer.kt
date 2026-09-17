@@ -120,19 +120,24 @@ object AiRichTextRenderer {
         return raw.take(maxChars) + TRUNCATED_NOTICE
     }
 
-    private fun buildMarkwon(view: TextView): Markwon = Markwon.builder(view.context)
-        .usePlugin(MarkwonInlineParserPlugin.create())
-        .usePlugin(
-            JLatexMathPlugin.create(view.textSize, object : JLatexMathPlugin.BuilderConfigure {
-                override fun configureBuilder(builder: JLatexMathPlugin.Builder) {
-                    builder.inlinesEnabled(true)
-                }
-            }),
-        )
-        .usePlugin(StrikethroughPlugin.create())
-        .usePlugin(TablePlugin.create(view.context))
-        .usePlugin(TaskListPlugin.create(view.context))
-        .build()
+    private fun buildMarkwon(view: TextView): Markwon {
+        // Never let a cached renderer retain a ReaderActivity through its Context. A WeakHashMap
+        // key is not enough if the value points back to Activity -> View hierarchy -> key.
+        val appContext = view.context.applicationContext
+        return Markwon.builder(appContext)
+            .usePlugin(MarkwonInlineParserPlugin.create())
+            .usePlugin(
+                JLatexMathPlugin.create(view.textSize, object : JLatexMathPlugin.BuilderConfigure {
+                    override fun configureBuilder(builder: JLatexMathPlugin.Builder) {
+                        builder.inlinesEnabled(true)
+                    }
+                }),
+            )
+            .usePlugin(StrikethroughPlugin.create())
+            .usePlugin(TablePlugin.create(appContext))
+            .usePlugin(TaskListPlugin.create(appContext))
+            .build()
+    }
 }
 
 /**
