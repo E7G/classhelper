@@ -87,8 +87,8 @@ android {
         minSdk = 26
         targetSdk = 35
         ndk { abiFilters += listOf("arm64-v8a") }
-        versionCode = 228
-        versionName = "1.12.13-blank-pdf-switch-fix"
+        versionCode = 229
+        versionName = "1.12.14-visible-blank-pdf-entry"
         vectorDrawables.useSupportLibrary = true
     }
 
