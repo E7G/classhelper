@@ -1,3 +1,11 @@
+## ClassHelper 1.12.15-keep-screen-on
+
+- Reader/PDF 阅读与听课界面默认保持亮屏，不受系统自动息屏超时影响。
+- 保持亮屏仅作用于 ReaderActivity 当前窗口；离开 Reader 后恢复设备原有的系统息屏策略。
+- 使用 Android `FLAG_KEEP_SCREEN_ON`，不申请 `WAKE_LOCK` 权限，也不在后台强制点亮屏幕。
+- 增加源码回归检查，防止后续重构误删保持亮屏行为。
+- 版本提升到 `1.12.15-keep-screen-on`。
+
 ## ClassHelper 1.12.14-visible-blank-pdf-entry
 
 - 修复“新建空白 PDF”入口不可见：去掉一次性绑定状态，Reader 每次 resume 都会幂等检查并补齐入口；未打开 PDF 时首页显示“新建空白 PDF”，已打开 PDF 时顶部“打开”旁固定显示“新建”。

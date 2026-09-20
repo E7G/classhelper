@@ -18,6 +18,7 @@ import android.text.InputType
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -154,6 +155,9 @@ class ReaderActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Keep the classroom/PDF reader awake while it is visible. This is scoped to this
+        // Activity window, so leaving Reader restores the user's normal system screen timeout.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_reader)
         app = application as ClassHelperApp
         pdfView = findViewById(R.id.pdfView)
