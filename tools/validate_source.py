@@ -85,6 +85,8 @@ for marker in ['setMinZoom(1f)', 'setMidZoom(2f)', 'setMaxZoom(4f)']:
         errors.append(f'ReaderActivity regression: PDF zoom level missing: {marker}')
 if 'setSingleLine(true)' not in reader_text:
     errors.append('ReaderActivity regression: programmatic search EditText must use setSingleLine(true)')
+if 'WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON' not in reader_text:
+    errors.append('ReaderActivity regression: FLAG_KEEP_SCREEN_ON must stay enabled while Reader is visible')
 if '?.removePrefix("#")?.trim().orEmpty()' not in plain_text:
     errors.append('PlainTextImporter regression: nullable title trim must stay null-safe')
 for marker in ['@+id/topChrome', '@+id/bottomChrome', '@+id/sidePanelScroll', '@+id/sidePanelActions']:
